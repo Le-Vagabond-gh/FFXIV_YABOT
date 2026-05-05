@@ -1,0 +1,25 @@
+
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.7.34221.43
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "yabot", "yabot\yabot.csproj", "{558F3F9B-1D7A-43C0-BEB9-3E4E52BD95CB}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{558F3F9B-1D7A-43C0-BEB9-3E4E52BD95CB}.Debug|x64.ActiveCfg = Debug|x64
+		{558F3F9B-1D7A-43C0-BEB9-3E4E52BD95CB}.Debug|x64.Build.0 = Debug|x64
+		{558F3F9B-1D7A-43C0-BEB9-3E4E52BD95CB}.Release|x64.ActiveCfg = Release|x64
+		{558F3F9B-1D7A-43C0-BEB9-3E4E52BD95CB}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {5BB8E219-4C21-438A-8DC6-0F262F79A276}
+	EndGlobalSection
+EndGlobal

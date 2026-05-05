@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Dalamud.NET.Sdk/15.0.0">
+
+  <PropertyGroup>
+    <Version>0.1.0</Version>
+    <TargetFramework>net10.0-windows7.0</TargetFramework>
+    <Platforms>x64</Platforms>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <LangVersion>preview</LangVersion>
+    <Nullable>enable</Nullable>
+    <RootNamespace>YABOT</RootNamespace>
+    <Description>YABOT - Yet Another Bundle of Tweaks - separately we are weak, but together we form a mighty YABOT!</Description>
+    <PackageProjectUrl>https://github.com/Le-Vagabond-gh/FFXIV_YABOT</PackageProjectUrl>
+    <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
+    <IsPackable>false</IsPackable>
+    <Configurations>Debug;ExportDebug;ExportRelease;Release</Configurations>
+    <NoWarn>CS8625;CS8618;CS8602;CS8604;CS8600;CS8603;CS8629;CS0414;CS0169;CS1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ECommons\ECommons\ECommons.csproj">
+      <PrivateAssets>none</PrivateAssets>
+    </ProjectReference>
+  </ItemGroup>
+
+</Project>
