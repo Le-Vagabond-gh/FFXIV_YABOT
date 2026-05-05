@@ -3,6 +3,7 @@ using Dalamud.Game.Addon.Lifecycle;
 using Dalamud.Game.Addon.Lifecycle.AddonArgTypes;
 using Dalamud.Hooking;
 using ECommons.DalamudServices;
+using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using Lumina.Excel;
 using Lumina.Excel.Sheets;
@@ -14,12 +15,16 @@ using System.Linq;
 namespace YABOT.Features.UI
 {
     // Adapted from MapleHinata/Dalamud.LoadingImage by goat / Maple.
-    // Uses the original plugin's byte-signature hook to capture the destination
-    // territory ID. A polling-based replacement using GameMain.NextTerritoryTypeId
-    // was attempted (see commit history) but produced wrong / stuck textures across
-    // zone changes - the field's update timing relative to _LocationTitle.PreDraw
-    // is inconsistent. The hook captures the destination as a function argument
-    // which is racy-by-construction-impossible.
+    // Captures the destination territory ID by hooking UIModule's vfunc 188 (ShowLocationTitle),
+    // which is the function the game calls to bring up the loading-screen overlay. The
+    // territory ID arrives as the first argument. We resolve the function via UIModule's
+    // CS-maintained static-vtable signature; vfunc indices are stable across patches so
+    // there's nothing version-fragile in this file.
+    // The original plugin used a hardcoded byte signature for a lower-level 5-arg handler
+    // (broke every patch); EventFramework.SetTerritoryTypeId was also tried but fired ~half
+    // a second AFTER _LocationTitle.PreDraw, producing a visible delay. Polling
+    // GameMain.NextTerritoryTypeId from Framework.Update produced wrong / stuck textures
+    // because the field's update timing relative to PreDraw is inconsistent.
     public unsafe class FancyLoadingScreens : Feature
     {
         public override string Name => "Fancy Loading Screens";
@@ -56,8 +61,8 @@ namespace YABOT.Features.UI
             public static LoadingImageRow Create(ExcelPage page, uint offset, uint row) => new(page, offset, row);
         }
 
-        private delegate byte HandleTerriChangeDelegate(IntPtr a1, uint a2, byte a3, byte a4, IntPtr a5);
-        private Hook<HandleTerriChangeDelegate>? handleTerriChangeHook;
+        private delegate void ShowLocationTitleDelegate(UIModule* uiModule, uint territoryId, bool zoomAnim, bool restartAnim, int* language);
+        private Hook<ShowLocationTitleDelegate>? showLocationTitleHook;
 
         private ExcelSheet<TerritoryType>? terris;
         private ExcelSheet<LoadingImageRow>? loadings;
@@ -74,10 +79,10 @@ namespace YABOT.Features.UI
             loadings = Svc.Data.GetExcelSheet<LoadingImageRow>();
             cfcs = Svc.Data.GetExcelSheet<ContentFinderCondition>();
 
-            handleTerriChangeHook = Svc.Hook.HookFromAddress<HandleTerriChangeDelegate>(
-                Svc.SigScanner.ScanText("40 53 55 56 41 56 48 81 EC F8 00 00 00"),
-                HandleTerriChangeDetour);
-            handleTerriChangeHook.Enable();
+            showLocationTitleHook = Svc.Hook.HookFromAddress<ShowLocationTitleDelegate>(
+                (nint)UIModule.StaticVirtualTablePointer->ShowLocationTitle,
+                ShowLocationTitleDetour);
+            showLocationTitleHook.Enable();
 
             Svc.AddonLifecycle.RegisterListener(AddonEvent.PreDraw, "_LocationTitle", LocationTitleOnDraw);
             Svc.Framework.Update += FrameworkOnUpdate;
@@ -89,17 +94,17 @@ namespace YABOT.Features.UI
             SaveConfig(Config);
             Svc.Framework.Update -= FrameworkOnUpdate;
             Svc.AddonLifecycle.UnregisterListener(LocationTitleOnDraw);
-            handleTerriChangeHook?.Disable();
-            handleTerriChangeHook?.Dispose();
-            handleTerriChangeHook = null;
+            showLocationTitleHook?.Disable();
+            showLocationTitleHook?.Dispose();
+            showLocationTitleHook = null;
             base.Disable();
         }
 
-        private byte HandleTerriChangeDetour(IntPtr a1, uint a2, byte a3, byte a4, IntPtr a5)
+        private void ShowLocationTitleDetour(UIModule* uiModule, uint territoryId, bool zoomAnim, bool restartAnim, int* language)
         {
-            toLoadingTerri = (int)a2;
+            toLoadingTerri = (int)territoryId;
             Svc.Log.Verbose($"[FancyLoadingScreens] toLoadingTerri: {toLoadingTerri}");
-            return handleTerriChangeHook!.Original(a1, a2, a3, a4, a5);
+            showLocationTitleHook!.Original(uiModule, territoryId, zoomAnim, restartAnim, language);
         }
 
         private void LocationTitleOnDraw(AddonEvent type, AddonArgs args)
