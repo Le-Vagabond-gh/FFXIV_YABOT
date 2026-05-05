@@ -19,5 +19,8 @@ namespace YABOT
         [PluginService] public static ITargetManager TargetManager { get; private set; } = null!;
         [PluginService] public static IKeyState KeyState { get; private set; } = null!;
         [PluginService] public static ITextureProvider TextureProvider { get; private set; } = null!;
+        [PluginService] public static IDtrBar DtrBar { get; private set; } = null!;
+        [PluginService] public static IDutyState DutyState { get; private set; } = null!;
+        [PluginService] public static IPlayerState PlayerState { get; private set; } = null!;
     }
 }
