@@ -17,7 +17,7 @@ public unsafe class CommendationOverlay : Feature
 {
     public override string Name => "Commendation Tracker";
 
-    public override string Description => "Displays your commendation count in real time when the commend popup appears at the end of a duty, so you can see if other players commend you.";
+    public override string Description => "Displays your commendation count after you leave a duty, so you can see if other players commended you. Commendations aren't delivered while the commend popup is up (so players can't pressure each other for them) - they only arrive once everyone has left the duty.";
 
     public override FeatureType FeatureType => FeatureType.UI;
 
