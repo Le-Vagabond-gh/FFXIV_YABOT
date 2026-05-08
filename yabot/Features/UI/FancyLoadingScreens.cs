@@ -38,13 +38,16 @@ namespace YABOT.Features.UI
 
         public class Configs : FeatureConfig
         {
-            // 16:9 reference layout (lifted verbatim from the standalone plugin).
+            // 16:9 reference layout. OffsetX/Y is the image *center* in addon coords
+            // (not top-left), so center-pivot scaling keeps the artwork in place when
+            // ScaleX/Y is nudged. ScaleX/Y = 0.7 fills the loading panel without
+            // leaving a black bar on either side of the zoom-in target.
             public int Width = 1920;
             public int Height = 1080;
-            public float ScaleX = 0.595f;
-            public float ScaleY = 0.595f;
-            public float OffsetX = -60f;
-            public float OffsetY = -220f;
+            public float ScaleX = 0.7f;
+            public float ScaleY = 0.7f;
+            public float OffsetX = 511f;
+            public float OffsetY = 101f;
         }
 
         public Configs Config { get; private set; } = null!;
@@ -211,25 +214,32 @@ namespace YABOT.Features.UI
                 loadingImage->Height = (ushort)Config.Height;
                 loadingImage->ScaleX = Config.ScaleX;
                 loadingImage->ScaleY = Config.ScaleY;
-                loadingImage->X = Config.OffsetX;
-                loadingImage->Y = Config.OffsetY;
+                // Center-pivot scaling: pin OriginX/Y to the image middle, then offset
+                // the node so the visible center lands at Config.OffsetX/Y. With this
+                // setup, dragging ScaleX/Y grows or shrinks the artwork in place.
+                loadingImage->OriginX = Config.Width / 2f;
+                loadingImage->OriginY = Config.Height / 2f;
+                loadingImage->X = Config.OffsetX - Config.Width / 2f;
+                loadingImage->Y = Config.OffsetY - Config.Height / 2f;
                 loadingImage->Priority = 0;
                 loadingImage->DrawFlags |= 0x1;
 
-                hasLoading = false;
+                // Intentionally don't clear hasLoading here - LocationTitleOnDraw keeps
+                // it true while _LocationTitle is being drawn, so layout reapplies every
+                // frame and live config edits are visible immediately.
             }
             catch { }
         }
 
         protected override DrawConfigDelegate DrawConfigTree => (ref bool hasChanged) =>
         {
-            ImGui.TextWrapped("Layout (defaults are 16:9-tuned; reset if you mess with these and want sane numbers back):");
+            ImGui.TextWrapped("Layout (scale pivots from image center):");
             if (ImGui.InputInt("Width", ref Config.Width)) hasChanged = true;
             if (ImGui.InputInt("Height", ref Config.Height)) hasChanged = true;
             if (ImGui.InputFloat("Scale X", ref Config.ScaleX)) hasChanged = true;
             if (ImGui.InputFloat("Scale Y", ref Config.ScaleY)) hasChanged = true;
-            if (ImGui.InputFloat("Offset X", ref Config.OffsetX)) hasChanged = true;
-            if (ImGui.InputFloat("Offset Y", ref Config.OffsetY)) hasChanged = true;
+            if (ImGui.InputFloat("Center X", ref Config.OffsetX)) hasChanged = true;
+            if (ImGui.InputFloat("Center Y", ref Config.OffsetY)) hasChanged = true;
             if (ImGui.Button("Reset to 16:9 defaults"))
             {
                 Config = new Configs();
