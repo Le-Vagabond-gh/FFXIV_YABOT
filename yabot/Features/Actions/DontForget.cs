@@ -70,6 +70,7 @@ namespace YABOT.Features.Actions
         private DateTime demiSummonLastSeen = DateTime.MinValue;
         private DateTime movementStartTime = DateTime.MinValue;
         private DateTime lastStanceAction = DateTime.MinValue;
+        private DateTime lastTankStanceAction = DateTime.MinValue;
         private DateTime playerRaisedTimestamp = DateTime.MinValue;
         private bool wasUnconscious;
         private bool wasInCombat;
@@ -90,10 +91,20 @@ namespace YABOT.Features.Actions
             base.Disable();
         }
 
+        private static bool IsInGPose()
+        {
+            if (Svc.ClientState.IsGPosing) return true;
+            if (Svc.GameGui.GetAddonByName("GPoseHud").Address != nint.Zero) return true;
+            if (Svc.GameGui.GetAddonByName("BannerEditor").Address != nint.Zero) return true;
+            return false;
+        }
+
         private void OnFrameworkUpdate(IFramework framework)
         {
             try
             {
+                if (IsInGPose()) return;
+
                 var player = Svc.Objects.LocalPlayer;
                 if (player == null) return;
 
@@ -184,25 +195,27 @@ namespace YABOT.Features.Actions
                             am->UseAction(ActionType.Action, SummonCarbuncle);
                     }
 
-                    // Auto tank stance
-                    if (Config.TankStance)
+                    // Auto tank stance, with 2-second cooldown to prevent runaway recasts
+                    if (Config.TankStance && (DateTime.Now - lastTankStanceAction).TotalSeconds >= 2)
                     {
                         var statuses = player.StatusList;
+                        var fired = false;
                         switch (classJobId)
                         {
                             case 19 when !statuses.Any(x => x.StatusId == IronWillStatus)
                                           && am->GetActionStatus(ActionType.Action, IronWill) == 0:
-                                am->UseAction(ActionType.Action, IronWill); break;
+                                am->UseAction(ActionType.Action, IronWill); fired = true; break;
                             case 21 when !statuses.Any(x => x.StatusId == DefianceStatus)
                                           && am->GetActionStatus(ActionType.Action, Defiance) == 0:
-                                am->UseAction(ActionType.Action, Defiance); break;
+                                am->UseAction(ActionType.Action, Defiance); fired = true; break;
                             case 32 when !statuses.Any(x => x.StatusId == GritStatus)
                                           && am->GetActionStatus(ActionType.Action, Grit) == 0:
-                                am->UseAction(ActionType.Action, Grit); break;
+                                am->UseAction(ActionType.Action, Grit); fired = true; break;
                             case 37 when !statuses.Any(x => x.StatusId == RoyalGuardStatus)
                                           && am->GetActionStatus(ActionType.Action, RoyalGuard) == 0:
-                                am->UseAction(ActionType.Action, RoyalGuard); break;
+                                am->UseAction(ActionType.Action, RoyalGuard); fired = true; break;
                         }
+                        if (fired) lastTankStanceAction = DateTime.Now;
                     }
 
                     // Auto gathering buffs (MIN/BTN/FSH) when standing still, with 2-second cooldown
@@ -284,6 +297,7 @@ namespace YABOT.Features.Actions
         {
             try
             {
+                if (IsInGPose()) return;
                 if (!Config.AutoSwitchGatherer) return;
 
                 // Type 2108 = "Unable to X. Current class not set to X" gathering errors
