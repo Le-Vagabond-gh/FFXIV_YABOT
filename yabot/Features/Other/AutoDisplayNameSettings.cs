@@ -11,7 +11,7 @@ namespace YABOT.Features.Other
     {
         public override string Name => "Auto Display Name Settings";
 
-        public override string Description => "Automatically changes the display name setting for other PCs based on whether you are in a city or outside.";
+        public override string Description => "Automatically changes the display name setting for other PCs based on whether you are in a city, in a duty, or outside.";
 
         public override FeatureType FeatureType => FeatureType.Other;
 
@@ -29,6 +29,7 @@ namespace YABOT.Features.Other
         {
             public DisplayNameType InCities = DisplayNameType.Always;
             public DisplayNameType OutsideCities = DisplayNameType.Always;
+            public DisplayNameType InDuty = DisplayNameType.Always;
         }
 
         public Configs Config { get; set; } = null!;
@@ -54,6 +55,15 @@ namespace YABOT.Features.Other
                 hasChanged = true;
                 ApplyForCurrentZone();
             }
+
+            var inDuty = (int)Config.InDuty;
+            ImGui.SetNextItemWidth(200 * ImGui.GetIO().FontGlobalScale);
+            if (ImGui.Combo("In Duty", ref inDuty, DisplayNameLabels, DisplayNameLabels.Length))
+            {
+                Config.InDuty = (DisplayNameType)inDuty;
+                hasChanged = true;
+                ApplyForCurrentZone();
+            }
         };
 
         public override void Enable()
@@ -73,8 +83,13 @@ namespace YABOT.Features.Other
         {
             try
             {
-                var isCity = Player.TerritoryIntendedUseEnum == TerritoryIntendedUseEnum.City_Area;
-                var desired = isCity ? Config.InCities : Config.OutsideCities;
+                DisplayNameType desired;
+                if (Player.IsInDuty)
+                    desired = Config.InDuty;
+                else if (Player.TerritoryIntendedUseEnum == TerritoryIntendedUseEnum.City_Area)
+                    desired = Config.InCities;
+                else
+                    desired = Config.OutsideCities;
                 Svc.GameConfig.Set(UiConfigOption.NamePlateDispTypeOther, (uint)desired);
             }
             catch { }
