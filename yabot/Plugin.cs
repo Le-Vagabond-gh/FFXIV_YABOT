@@ -52,7 +52,7 @@ public sealed class Plugin : IDalamudPlugin
 
         Svc.Commands.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
-            HelpMessage = "Open the YABOT configuration window.",
+            HelpMessage = "Open the YABOT configuration window, or run a subcommand: /yabot dontforget [option] [on|off|toggle]",
             ShowInHelp = true,
         });
 
@@ -94,7 +94,35 @@ public sealed class Plugin : IDalamudPlugin
         ECommonsMain.Dispose();
     }
 
-    private void OnCommand(string command, string args) => ToggleMain();
+    private void OnCommand(string command, string args)
+    {
+        args = (args ?? string.Empty).Trim();
+        if (args.Length == 0)
+        {
+            ToggleMain();
+            return;
+        }
+
+        var split = args.Split(' ', 2, System.StringSplitOptions.RemoveEmptyEntries);
+        var sub = split[0].ToLowerInvariant();
+        var rest = split.Length > 1 ? split[1] : string.Empty;
+
+        switch (sub)
+        {
+            case "dontforget":
+                var df = Features.OfType<YABOT.Features.Actions.DontForget>().FirstOrDefault();
+                if (df == null)
+                {
+                    Svc.Chat.PrintError("[YABOT] Don't Forget feature not loaded.");
+                    return;
+                }
+                df.HandleSubCommand(rest);
+                break;
+            default:
+                Svc.Chat.PrintError($"[YABOT] Unknown subcommand '{sub}'. Try: /yabot dontforget [option] [on|off|toggle]");
+                break;
+        }
+    }
 
     public void ToggleMain()
     {

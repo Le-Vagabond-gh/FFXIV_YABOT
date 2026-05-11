@@ -11,4 +11,14 @@ Sub-features:
 - **Chocobo Stance Keeper** - enforces a chosen Free/Attacker/Defender/Healer stance on the chocobo companion.
 - **Auto Switch Gatherer** - listens for "Unable to gather. Current class not set to Miner/Botanist" chat errors and switches to the matching gearset.
 
+## Chat command
+
+`/yabot dontforget [option] [on|off|toggle]` toggles individual sub-features without opening the config window.
+
+- `/yabot dontforget` or `/yabot dontforget list` - print all options and their current state.
+- `/yabot dontforget peloton` - flip the `Peloton` option.
+- `/yabot dontforget autosprint off` - set explicitly.
+
+Option names match the config field names (case-insensitive): `scholar`, `summoner`, `summonincombatafterdeath`, `tankstance`, `gatheringbuffs`, `autoswitchgatherer`, `peloton`, `autosprint`, `autogysahlgreens`. `ChocoboStanceOption` is not exposed (multi-valued, use the config UI).
+
 Originally a standalone plugin (`ffxiv_dontforget`); folded into YABOT.

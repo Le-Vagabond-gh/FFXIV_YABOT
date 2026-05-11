@@ -458,6 +458,8 @@ namespace YABOT.Features.UI
                     ImGui.TableHeadersRow();
 
                     int? toRemove = null;
+                    int? moveUp = null;
+                    int? moveDown = null;
                     for (var i = 0; i < cfg.Shortcuts.Count; i++)
                     {
                         var sc = cfg.Shortcuts[i];
@@ -474,8 +476,37 @@ namespace YABOT.Features.UI
                             changed = true;
 
                         ImGui.TableNextColumn();
+                        var atTop = i == 0;
+                        var atBottom = i == cfg.Shortcuts.Count - 1;
+
+                        if (atTop) ImGui.BeginDisabled();
+                        if (ImGui.SmallButton($"^##sc_up_{i}")) moveUp = i;
+                        if (atTop) ImGui.EndDisabled();
+                        if (ImGui.IsItemHovered() && !atTop) ImGui.SetTooltip("Move up");
+
+                        ImGui.SameLine();
+                        if (atBottom) ImGui.BeginDisabled();
+                        if (ImGui.SmallButton($"v##sc_down_{i}")) moveDown = i;
+                        if (atBottom) ImGui.EndDisabled();
+                        if (ImGui.IsItemHovered() && !atBottom) ImGui.SetTooltip("Move down");
+
+                        ImGui.SameLine();
                         if (ImGui.SmallButton($"x##sc_rm_{i}"))
                             toRemove = i;
+                        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Remove");
+                    }
+
+                    if (moveUp.HasValue)
+                    {
+                        var i = moveUp.Value;
+                        (cfg.Shortcuts[i - 1], cfg.Shortcuts[i]) = (cfg.Shortcuts[i], cfg.Shortcuts[i - 1]);
+                        changed = true;
+                    }
+                    else if (moveDown.HasValue)
+                    {
+                        var i = moveDown.Value;
+                        (cfg.Shortcuts[i + 1], cfg.Shortcuts[i]) = (cfg.Shortcuts[i], cfg.Shortcuts[i + 1]);
+                        changed = true;
                     }
 
                     if (toRemove.HasValue)

@@ -10,6 +10,7 @@ using FFXIVClientStructs.FFXIV.Client.UI.Misc;
 using YABOT.FeaturesSetup;
 using System;
 using System.Linq;
+using System.Reflection;
 
 namespace YABOT.Features.Actions
 {
@@ -311,6 +312,60 @@ namespace YABOT.Features.Actions
                     SwitchToGearset(17);
             }
             catch { }
+        }
+
+        public void HandleSubCommand(string args)
+        {
+            args = (args ?? string.Empty).Trim();
+
+            var boolFields = typeof(Configs).GetFields(BindingFlags.Instance | BindingFlags.Public)
+                .Where(f => f.FieldType == typeof(bool))
+                .ToList();
+
+            if (args.Length == 0 || args.Equals("list", StringComparison.OrdinalIgnoreCase))
+            {
+                Svc.Chat.Print("[YABOT] Don't Forget options:");
+                foreach (var f in boolFields)
+                {
+                    var v = (bool)f.GetValue(Config)!;
+                    Svc.Chat.Print($"  {f.Name.ToLowerInvariant()}: {(v ? "ON" : "OFF")}");
+                }
+                return;
+            }
+
+            var parts = args.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+            var optionName = parts[0];
+            var setTo = parts.Length > 1 ? parts[1].Trim().ToLowerInvariant() : null;
+
+            var field = boolFields.FirstOrDefault(f =>
+                f.Name.Equals(optionName, StringComparison.OrdinalIgnoreCase));
+
+            if (field == null)
+            {
+                var names = string.Join(", ", boolFields.Select(f => f.Name.ToLowerInvariant()));
+                Svc.Chat.PrintError($"[YABOT] Unknown Don't Forget option '{optionName}'. Available: {names}");
+                return;
+            }
+
+            var current = (bool)field.GetValue(Config)!;
+            bool newVal = setTo switch
+            {
+                "on" or "true" or "1" => true,
+                "off" or "false" or "0" => false,
+                null or "" or "toggle" => !current,
+                _ => current,
+            };
+
+            if (setTo != null && setTo != "toggle" && newVal == current && setTo is not ("on" or "off" or "true" or "false" or "0" or "1"))
+            {
+                Svc.Chat.PrintError($"[YABOT] Unknown value '{setTo}'. Use on/off/toggle.");
+                return;
+            }
+
+            field.SetValue(Config, newVal);
+            SaveConfig(Config);
+
+            Svc.Chat.Print($"[YABOT] Don't Forget - {field.Name}: {(newVal ? "ON" : "OFF")}");
         }
 
         private void SwitchToGearset(byte classJobId)

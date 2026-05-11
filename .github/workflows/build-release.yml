@@ -3,7 +3,8 @@ name: Build and Release
 on:
   push:
     paths:
-      - 'yabot/**'
+      - 'yabot/**.cs'
+      - 'yabot/**.csproj'
       - 'yabot.sln'
   workflow_dispatch:
 
