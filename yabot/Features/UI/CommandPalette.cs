@@ -4,6 +4,7 @@ using Dalamud.Game.Gui.Dtr;
 using Dalamud.Game.Text.SeStringHandling;
 using Dalamud.Game.Text.SeStringHandling.Payloads;
 using Dalamud.Interface.Windowing;
+using ECommons.Automation;
 using ECommons.DalamudServices;
 using YABOT.FeaturesSetup;
 using System;
@@ -393,7 +394,10 @@ namespace YABOT.Features.UI
 
             private static void RunCommand(string cmd)
             {
-                try { Service.CommandManager.ProcessCommand(cmd); }
+                // Route through the game's chat box entry so built-in game commands (/dice, /em, /li, ...)
+                // work too - Dalamud's CommandManager.ProcessCommand only knows about plugin-registered
+                // commands. Plugin commands still work because Dalamud hooks ProcessChatBoxEntry.
+                try { Chat.SendMessage(cmd); }
                 catch (Exception ex) { Svc.Log.Error(ex, $"CommandPalette: failed to run {cmd}"); }
             }
 
