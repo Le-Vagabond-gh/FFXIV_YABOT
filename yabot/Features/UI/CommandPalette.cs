@@ -136,8 +136,7 @@ namespace YABOT.Features.UI
             private const ImGuiWindowFlags BaseFlags =
                 ImGuiWindowFlags.NoTitleBar
                 | ImGuiWindowFlags.NoCollapse
-                | ImGuiWindowFlags.NoDocking
-                | ImGuiWindowFlags.NoSavedSettings;
+                | ImGuiWindowFlags.NoDocking;
 
             public DropdownWindow(CommandPalette parent)
                 : base("###YABOT_CommandPaletteDropdown", BaseFlags)
@@ -164,9 +163,10 @@ namespace YABOT.Features.UI
                 if (requestedAnchor.HasValue)
                 {
                     // Anchor the top-right corner of the dropdown at the click point so it grows down and to the left
-                    // (the server info bar lives in the top-right of the screen).
+                    // (the server info bar lives in the top-right of the screen). Size persists across
+                    // openings via ImGui's ini file - FirstUseEver only seeds the initial value.
                     ImGui.SetNextWindowPos(requestedAnchor.Value, ImGuiCond.Always, new Vector2(1f, 0f));
-                    ImGui.SetNextWindowSize(new Vector2(720, 360), ImGuiCond.Appearing);
+                    ImGui.SetNextWindowSize(new Vector2(720, 360), ImGuiCond.FirstUseEver);
                     requestedAnchor = null;
                 }
             }
