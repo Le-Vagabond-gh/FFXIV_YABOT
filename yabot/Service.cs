@@ -1,3 +1,4 @@
+using Dalamud.Game.Gui.NamePlate;
 using Dalamud.IoC;
 using Dalamud.Plugin.Services;
 
@@ -22,5 +23,6 @@ namespace YABOT
         [PluginService] public static IDtrBar DtrBar { get; private set; } = null!;
         [PluginService] public static IDutyState DutyState { get; private set; } = null!;
         [PluginService] public static IPlayerState PlayerState { get; private set; } = null!;
+        [PluginService] public static INamePlateGui NamePlateGui { get; private set; } = null!;
     }
 }
