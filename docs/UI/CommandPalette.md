@@ -7,7 +7,9 @@ Adds a small button to the server info bar (top-right) that drops down a searcha
 - **Star icon (☆ / ★)** in front of a command: pin it to the top of the dropdown. Favourites are sorted before everything else, then by plugin, then alphabetically.
 - **Right-click** a command in the dropdown: run it, copy it, toggle its favourite, or add/remove it from the active list.
 - **Click a long favourite description**: toggle between the trimmed preview and the full text. The preview cuts at the first newline if there is one, otherwise at ~200 characters. Non-favourite descriptions are always shown in full.
-- **"Display non-favourited commands"** checkbox next to the filter box: when unchecked, the dropdown shows only favourites and shortcuts.
+- **Clear (X) button** next to the filter box: empties the filter in one click. Disabled when the filter is already empty.
+- **"★ only"** checkbox: when checked, the dropdown hides non-favourited commands. Custom shortcuts always remain visible.
+- **"Desc."** checkbox: toggles the description column on/off. The window grows / shrinks from the left edge by the column's width (the right edge stays anchored), matching how the dropdown opens from the server info bar.
 - **Click outside / focus another window**: dropdown auto-closes.
 
 The filter box matches against the command, the owning plugin's assembly name, the help text, and shortcut labels.
@@ -19,7 +21,7 @@ Sub-commands like `/li w` (world change) are parsed by the game or the owning pl
 - A shortcut is a `(label, command line)` pair. The label is what appears in the dropdown; the command line is what's actually sent (verbatim) through `CommandManager.ProcessCommand`.
 - Shortcuts always appear at the top of the dropdown, above favourites.
 - Right-click a shortcut to copy the command or run it from the menu.
-- Edit shortcuts in place in the settings table. Use the row's `x` button to delete one.
+- Edit shortcuts in place in the settings table. Each row has up / down arrow buttons to reorder it and a trash icon to delete it.
 
 ## Display options
 

@@ -3,6 +3,8 @@ using Dalamud.Game.Command;
 using Dalamud.Game.Gui.Dtr;
 using Dalamud.Game.Text.SeStringHandling;
 using Dalamud.Game.Text.SeStringHandling.Payloads;
+using Dalamud.Interface;
+using Dalamud.Interface.Components;
 using Dalamud.Interface.Windowing;
 using ECommons.Automation;
 using ECommons.DalamudServices;
@@ -35,7 +37,8 @@ namespace YABOT.Features.UI
             public List<CustomShortcut> Shortcuts = new();
             public bool HideHelpHidden = true;
             public bool HideYabot = false;
-            public bool ShowNonFavourites = true;
+            public bool FavouritesOnly = false;
+            public bool ShowDescription = true;
         }
 
         public Configs Config { get; private set; } = null!;
@@ -187,7 +190,7 @@ namespace YABOT.Features.UI
                                     || (r.Info.HelpMessage ?? string.Empty).Contains(filterText, StringComparison.OrdinalIgnoreCase)
                                     || r.Assembly.Contains(filterText, StringComparison.OrdinalIgnoreCase));
 
-                if (!parent.Config.ShowNonFavourites)
+                if (parent.Config.FavouritesOnly)
                     commandQuery = commandQuery.Where(r => parent.Config.Favourites.Contains(r.Command));
 
                 var commandRows = commandQuery
@@ -217,22 +220,58 @@ namespace YABOT.Features.UI
                 }
             }
 
+            // Approximate width of the description column, used to grow/shrink the window from
+            // the right edge when the user toggles "Desc.".
+            private const float DescriptionColumnApproxWidth = 300f;
+
             private void DrawFilterRow()
             {
-                var checkboxLabel = "Display non-favourited commands";
-                var checkboxWidth = ImGui.CalcTextSize(checkboxLabel).X + ImGui.GetFrameHeight() + ImGui.GetStyle().ItemInnerSpacing.X;
+                const string favOnlyLabel = "★ only";
+                const string descLabel = "Desc.";
+
+                var style = ImGui.GetStyle();
+                var frameHeight = ImGui.GetFrameHeight();
+                var clearWidth = frameHeight; // square IconButton
+                var favWidth = ImGui.CalcTextSize(favOnlyLabel).X + frameHeight + style.ItemInnerSpacing.X;
+                var descWidth = ImGui.CalcTextSize(descLabel).X + frameHeight + style.ItemInnerSpacing.X;
                 var available = ImGui.GetContentRegionAvail().X;
-                var filterWidth = Math.Max(120f, available - checkboxWidth - ImGui.GetStyle().ItemSpacing.X);
+                var filterWidth = Math.Max(120f, available - clearWidth - favWidth - descWidth - style.ItemSpacing.X * 3f);
 
                 ImGui.SetNextItemWidth(filterWidth);
                 ImGui.InputTextWithHint("##filter", "Filter commands, plugins, shortcuts or descriptions...", ref filterText, 256);
-                ImGui.SameLine();
 
-                var show = parent.Config.ShowNonFavourites;
-                if (ImGui.Checkbox(checkboxLabel, ref show))
+                ImGui.SameLine(0, style.ItemInnerSpacing.X);
+                var hasText = !string.IsNullOrEmpty(filterText);
+                if (!hasText) ImGui.BeginDisabled();
+                if (ImGuiComponents.IconButton("##filter_clear", FontAwesomeIcon.Times))
+                    filterText = string.Empty;
+                if (!hasText) ImGui.EndDisabled();
+                if (hasText && ImGui.IsItemHovered()) ImGui.SetTooltip("Clear filter");
+
+                ImGui.SameLine();
+                var favOnly = parent.Config.FavouritesOnly;
+                if (ImGui.Checkbox(favOnlyLabel, ref favOnly))
                 {
-                    parent.Config.ShowNonFavourites = show;
+                    parent.Config.FavouritesOnly = favOnly;
                     parent.Save();
+                }
+
+                ImGui.SameLine();
+                var showDesc = parent.Config.ShowDescription;
+                if (ImGui.Checkbox(descLabel, ref showDesc))
+                {
+                    parent.Config.ShowDescription = showDesc;
+                    parent.Save();
+
+                    // Grow / shrink the window from the left edge (right edge stays put), matching
+                    // the dropdown's top-right anchor.
+                    var pos = ImGui.GetWindowPos();
+                    var size = ImGui.GetWindowSize();
+                    var requested = showDesc ? DescriptionColumnApproxWidth : -DescriptionColumnApproxWidth;
+                    var newWidth = Math.Max(280f, size.X + requested);
+                    var actualDelta = newWidth - size.X;
+                    ImGui.SetWindowPos(new Vector2(pos.X - actualDelta, pos.Y));
+                    ImGui.SetWindowSize(new Vector2(newWidth, size.Y));
                 }
             }
 
@@ -247,26 +286,35 @@ namespace YABOT.Features.UI
                     | ImGuiTableFlags.ScrollY
                     | ImGuiTableFlags.SizingFixedFit;
 
-                if (!ImGui.BeginTable("YABOT_CommandPaletteTable", 4, tableFlags))
+                var includeDesc = parent.Config.ShowDescription;
+                var columnCount = includeDesc ? 4 : 3;
+                // Different table id per layout so saved column widths don't bleed between 3- and 4-column modes.
+                var tableId = includeDesc ? "YABOT_CommandPaletteTable" : "YABOT_CommandPaletteTable_NoDesc";
+
+                if (!ImGui.BeginTable(tableId, columnCount, tableFlags))
                     return;
 
-                // Star, command and plugin columns auto-fit to their content (WidthFixed with init width 0).
-                // Description uses WidthStretch so it takes the remaining space - with the default window
-                // width of 720, that's around 350px. The table scrolls internally with a sticky header row.
                 ImGui.TableSetupScrollFreeze(0, 1);
                 ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed, 0f);
                 ImGui.TableSetupColumn("Command", ImGuiTableColumnFlags.WidthFixed, 0f);
-                ImGui.TableSetupColumn("Plugin", ImGuiTableColumnFlags.WidthFixed, 0f);
-                ImGui.TableSetupColumn("Description", ImGuiTableColumnFlags.WidthStretch, 1f);
+                if (includeDesc)
+                {
+                    ImGui.TableSetupColumn("Plugin", ImGuiTableColumnFlags.WidthFixed, 0f);
+                    ImGui.TableSetupColumn("Description", ImGuiTableColumnFlags.WidthStretch, 1f);
+                }
+                else
+                {
+                    ImGui.TableSetupColumn("Plugin", ImGuiTableColumnFlags.WidthStretch, 1f);
+                }
                 ImGui.TableHeadersRow();
 
-                DrawShortcutRows(shortcutRows);
-                DrawCommandRows(commandRows);
+                DrawShortcutRows(shortcutRows, includeDesc);
+                DrawCommandRows(commandRows, includeDesc);
 
                 ImGui.EndTable();
             }
 
-            private void DrawShortcutRows((CustomShortcut Shortcut, int Index)[] rows)
+            private void DrawShortcutRows((CustomShortcut Shortcut, int Index)[] rows, bool includeDesc)
             {
                 foreach (var (sc, idx) in rows)
                 {
@@ -301,13 +349,15 @@ namespace YABOT.Features.UI
                     ImGui.TableNextColumn();
                     ImGui.TextDisabled("(shortcut)");
 
-                    // Description column - shows the user-defined label.
-                    ImGui.TableNextColumn();
-                    ImGui.TextWrapped(string.IsNullOrEmpty(sc.Label) ? "(no label)" : sc.Label);
+                    if (includeDesc)
+                    {
+                        ImGui.TableNextColumn();
+                        ImGui.TextWrapped(string.IsNullOrEmpty(sc.Label) ? "(no label)" : sc.Label);
+                    }
                 }
             }
 
-            private void DrawCommandRows((string Command, IReadOnlyCommandInfo Info, string Assembly)[] rows)
+            private void DrawCommandRows((string Command, IReadOnlyCommandInfo Info, string Assembly)[] rows, bool includeDesc)
             {
                 var favColour = new Vector4(1f, 0.82f, 0.2f, 1f);
 
@@ -355,9 +405,11 @@ namespace YABOT.Features.UI
                     ImGui.TableNextColumn();
                     ImGui.TextUnformatted(asm);
 
-                    // ----- Description column -----
-                    ImGui.TableNextColumn();
-                    DrawDescription(cmd, info.HelpMessage, isFav);
+                    if (includeDesc)
+                    {
+                        ImGui.TableNextColumn();
+                        DrawDescription(cmd, info.HelpMessage, isFav);
+                    }
                 }
             }
 
@@ -420,13 +472,15 @@ namespace YABOT.Features.UI
             private string newShortcutCommand = string.Empty;
 
             public SettingsWindow(CommandPalette parent)
-                : base("Command Palette Settings###YABOT_CommandPaletteSettings", ImGuiWindowFlags.AlwaysAutoResize)
+                : base("Command Palette Settings###YABOT_CommandPaletteSettings")
             {
                 this.parent = parent;
+                Size = new Vector2(560, 420);
+                SizeCondition = ImGuiCond.FirstUseEver;
                 SizeConstraints = new WindowSizeConstraints
                 {
-                    MinimumSize = new Vector2(380, 0),
-                    MaximumSize = new Vector2(440, 1000),
+                    MinimumSize = new Vector2(460, 240),
+                    MaximumSize = new Vector2(1200, 1500),
                 };
             }
 
@@ -452,13 +506,17 @@ namespace YABOT.Features.UI
                 ImGui.TextDisabled("Saved snippets that appear at the top of the dropdown. Useful for things like '/li w ' that the game parses sub-commands for.");
                 ImGui.PopTextWrapPos();
 
+                // Reserve a fixed width for the actions column (3 IconButtons + spacing) so the
+                // stretch column (Command) shrinks instead of pushing the table past the window.
+                var actionsColumnWidth = ImGui.GetFrameHeight() * 3 + ImGui.GetStyle().ItemSpacing.X * 2 + 8f;
+
                 if (cfg.Shortcuts.Count > 0
                     && ImGui.BeginTable("##shortcuts_table", 3,
-                           ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingFixedFit | ImGuiTableFlags.Resizable))
+                           ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp))
                 {
-                    ImGui.TableSetupColumn("Label", ImGuiTableColumnFlags.WidthFixed, 160f);
-                    ImGui.TableSetupColumn("Command", ImGuiTableColumnFlags.WidthStretch, 1f);
-                    ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed, 0f);
+                    ImGui.TableSetupColumn("Label", ImGuiTableColumnFlags.WidthStretch, 0.35f);
+                    ImGui.TableSetupColumn("Command", ImGuiTableColumnFlags.WidthStretch, 0.65f);
+                    ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed, actionsColumnWidth);
                     ImGui.TableHeadersRow();
 
                     int? toRemove = null;
@@ -484,20 +542,20 @@ namespace YABOT.Features.UI
                         var atBottom = i == cfg.Shortcuts.Count - 1;
 
                         if (atTop) ImGui.BeginDisabled();
-                        if (ImGui.SmallButton($"^##sc_up_{i}")) moveUp = i;
+                        if (ImGuiComponents.IconButton($"##sc_up_{i}", FontAwesomeIcon.ArrowUp)) moveUp = i;
                         if (atTop) ImGui.EndDisabled();
                         if (ImGui.IsItemHovered() && !atTop) ImGui.SetTooltip("Move up");
 
                         ImGui.SameLine();
                         if (atBottom) ImGui.BeginDisabled();
-                        if (ImGui.SmallButton($"v##sc_down_{i}")) moveDown = i;
+                        if (ImGuiComponents.IconButton($"##sc_down_{i}", FontAwesomeIcon.ArrowDown)) moveDown = i;
                         if (atBottom) ImGui.EndDisabled();
                         if (ImGui.IsItemHovered() && !atBottom) ImGui.SetTooltip("Move down");
 
                         ImGui.SameLine();
-                        if (ImGui.SmallButton($"x##sc_rm_{i}"))
+                        if (ImGuiComponents.IconButton($"##sc_rm_{i}", FontAwesomeIcon.TrashAlt))
                             toRemove = i;
-                        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Remove");
+                        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Delete shortcut");
                     }
 
                     if (moveUp.HasValue)
