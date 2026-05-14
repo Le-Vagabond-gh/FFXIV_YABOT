@@ -1,5 +1,5 @@
 ## YABOT - Yet Another Bundle of Tweaks
-*separately we are tweaks, but together we form a mighty yabot!*
+*Separately we are tweaks, but together we form a mighty yabot!*
 
 A bundle of small quality-of-life tweaks for FFXIV.
 

@@ -19,10 +19,12 @@ internal class MainWindow : Window
     public string OpenWindow { get; private set; } = AllTweaks;
 
     public const string AllTweaks = "All Tweaks";
+    public const string EnabledLabel = "Enabled";
 
     private static readonly (string Label, FeatureType? Type)[] Categories =
     {
         (AllTweaks, null),
+        (EnabledLabel, null),
         ("Actions", FeatureType.Actions),
         ("Chat", FeatureType.Chat),
         ("Commands", FeatureType.Commands),
@@ -30,6 +32,7 @@ internal class MainWindow : Window
         ("Targets", FeatureType.Targets),
         ("UI", FeatureType.UI),
         ("Occult Crescent", FeatureType.OccultCrescent),
+        ("Plugin Mods", FeatureType.PluginMods),
     };
 
     public MainWindow() : base($"YABOT {typeof(MainWindow).Assembly.GetName().Version}###YABOTMain")
@@ -62,7 +65,7 @@ internal class MainWindow : Window
             ImGui.PushStyleVar(ImGuiStyleVar.SelectableTextAlign, new Vector2(0.0f, 0.5f));
             if (ImGui.BeginChild("###YABOTLeft", regionSize with { Y = topLeftSideHeight }, false, ImGuiWindowFlags.NoDecoration))
             {
-                ImGui.TextWrapped("separately we are weak, but together we form a mighty YABOT!");
+                ImGui.TextWrapped(Punchline);
                 ImGui.Spacing();
                 ImGui.Separator();
                 ImGui.Spacing();
@@ -112,6 +115,11 @@ internal class MainWindow : Window
                     DrawCommandTable(P.Features);
                     DrawFeatures(P.Features.ToArray(), header: AllTweaks);
                 }
+                else if (OpenWindow == EnabledLabel)
+                {
+                    var enabledFeatures = P.Features.Where(f => f.Enabled).ToArray();
+                    DrawFeatures(enabledFeatures, header: EnabledLabel);
+                }
                 else
                 {
                     var match = Categories.FirstOrDefault(c => c.Label == OpenWindow);
@@ -120,6 +128,14 @@ internal class MainWindow : Window
                         if (type == FeatureType.Commands)
                         {
                             DrawCommandTable(P.Features);
+                            var commandTabFeatures = P.Features
+                                .Where(x => x.FeatureType == type || x.CommandReferences.Any())
+                                .ToArray();
+                            DrawFeatures(commandTabFeatures, header: "");
+                        }
+                        else if (type == FeatureType.PluginMods)
+                        {
+                            DrawPluginModsHeader();
                             DrawFeatures(P.Features.Where(x => x.FeatureType == type).ToArray(), header: match.Label);
                         }
                         else
@@ -137,6 +153,17 @@ internal class MainWindow : Window
         }
 
         ImGui.EndTable();
+    }
+
+    private static void DrawPluginModsHeader()
+    {
+        ImGui.PushStyleColor(ImGuiCol.Text, ImGuiColors.DalamudYellow);
+        ImGui.TextWrapped(
+            "These tweaks reach into other plugins to alter their behaviour. They can stop working - or behave unexpectedly - when those plugins are updated. If a tweak misbehaves after a plugin update, disable it here and report it on the YABOT repo.");
+        ImGui.PopStyleColor();
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
     }
 
     private static void DrawCommandTable(IEnumerable<BaseFeature> features)
@@ -175,8 +202,11 @@ internal class MainWindow : Window
         var list = features as BaseFeature[] ?? features.ToArray();
         if (list.Length == 0) return;
 
-        ImGuiEx.LineCentered($"featureHeader_{header}", () => ImGui.Text(header));
-        ImGui.Separator();
+        if (!string.IsNullOrEmpty(header))
+        {
+            ImGuiEx.LineCentered($"featureHeader_{header}", () => ImGui.Text(header));
+            ImGui.Separator();
+        }
 
         foreach (var feature in list)
         {
@@ -216,7 +246,7 @@ internal class MainWindow : Window
             }
 
             if (feature.FeatureDisabled)
-                ImGuiEx.Text(ImGuiColors.DalamudRed, $"Disabled Reason: {feature.DisabledReason}");
+                ImGuiEx.Text(ImGuiColors.DalamudRed, $"Disabled - Reason: {feature.DisabledReason}");
 
             ImGui.Separator();
         }

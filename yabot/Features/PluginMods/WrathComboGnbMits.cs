@@ -6,18 +6,17 @@ using YABOT.FeaturesSetup;
 using System;
 using System.Collections.Generic;
 
-namespace YABOT.Features.Commands
+namespace YABOT.Features.PluginMods
 {
-    public class WrathComboGnbMits : Feature
+    public class WrathComboGnbMits : PluginModFeature
     {
         public override string Name => "WrathCombo: GNB Simple Mitigations Toggle";
 
         public override string Description =>
-            "Toggle WrathCombo's GNB simple-rotation mitigations (Heart of Stone/Corundum, Aurora, etc.) on or off " +
-            "without modifying WrathCombo. Reflects directly into WrathCombo's live config dictionary, so changes take " +
-            "effect immediately. Use /ymits [on|off|toggle] or the buttons below.";
+            "Toggle WrathCombo's GNB simple-rotation mitigations (Heart of Stone/Corundum, Aurora, etc.) on or off. " +
+            "Use /ymits [on|off|toggle] or the buttons below. Enable this tweak to register the command.";
 
-        public override FeatureType FeatureType => FeatureType.Commands;
+        public override string RequiredPluginName => PluginName;
 
         public override bool UseAutoConfig => false;
 

@@ -16,6 +16,7 @@ namespace YABOT;
 public sealed class Plugin : IDalamudPlugin
 {
     public string Name => "YABOT";
+    public const string Punchline = "Separately we are tweaks, but together we form a mighty YABOT!";
     private const string CommandName = "/yabot";
 
     internal WindowSystem Ws = null!;
@@ -66,7 +67,7 @@ public sealed class Plugin : IDalamudPlugin
         provider.LoadFeatures();
         FeatureProviders.Add(provider);
 
-        Svc.Log.Info("YABOT initialized - separately we are weak, but together we form a mighty YABOT!");
+        Svc.Log.Info($"YABOT initialized - {Punchline}");
     }
 
     public void Dispose()

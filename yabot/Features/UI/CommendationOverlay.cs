@@ -23,8 +23,8 @@ public unsafe class CommendationOverlay : Feature
 
     public override bool UseAutoConfig => true;
 
-    public override IEnumerable<(string Command, string Aliases, string Description)> CommandReferences =>
-        new[] { ("/ycommend", "[reset]", "Debug command for the Commendation Tracker overlay.") };
+    // /ycommend is intentionally not surfaced in CommandReferences - debug-only command,
+    // hidden from the Commands table and the Commands category filter. Still registered in Enable().
 
     public class Configs : FeatureConfig
     {
