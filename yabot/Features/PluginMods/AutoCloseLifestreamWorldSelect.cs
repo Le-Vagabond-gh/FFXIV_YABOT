@@ -19,12 +19,15 @@ namespace YABOT.Features.PluginMods
         private const string PluginName = "Lifestream";
         private const string GuiTypeName = "Lifestream.Services.Service+Gui";
 
+        private const int MaxConsecutiveFailures = 5;
+
         private bool prevBusy;
         private FieldInfo? selectWorldWindowField;
         private PropertyInfo? isOpenProp;
         private FieldInfo? taskManagerField;
         private PropertyInfo? isBusyProp;
         private bool reflectionFailed;
+        private int consecutiveFailures;
 
         public override void Enable()
         {
@@ -78,10 +81,20 @@ namespace YABOT.Features.PluginMods
                 }
 
                 prevBusy = isBusy;
+                consecutiveFailures = 0;
             }
             catch (Exception ex)
             {
-                Svc.Log.Warning($"[AutoCloseLifestreamWorldSelect] update failed: {ex.Message}");
+                consecutiveFailures++;
+                if (consecutiveFailures >= MaxConsecutiveFailures)
+                {
+                    reflectionFailed = true;
+                    Svc.Log.Warning($"[AutoCloseLifestreamWorldSelect] disabling after {consecutiveFailures} consecutive failures. Last error: {ex.Message}");
+                }
+                else
+                {
+                    Svc.Log.Warning($"[AutoCloseLifestreamWorldSelect] update failed ({consecutiveFailures}/{MaxConsecutiveFailures}): {ex.Message}");
+                }
             }
         }
 
