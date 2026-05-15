@@ -4,7 +4,7 @@ using YABOT.FeaturesSetup;
 
 namespace YABOT.Features.Other
 {
-    public class AutoFaceTargetDiadem : Feature
+    public class AutoFaceTargetDiadem : BaseFeature
     {
         public override string Name => "Auto Face Target in Diadem";
 

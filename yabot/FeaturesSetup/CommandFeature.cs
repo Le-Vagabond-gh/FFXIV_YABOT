@@ -8,7 +8,7 @@ using System.Text.RegularExpressions;
 
 namespace YABOT.Features;
 
-public abstract partial class CommandFeature : Feature
+public abstract partial class CommandFeature : BaseFeature
 {
     public abstract string Command { get; set; }
     public virtual bool Disabled { get; set; } = false;

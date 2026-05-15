@@ -1,25 +1,12 @@
 using System;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using Dalamud.Bindings.ImGui;
-using Dalamud.Game.Text;
-using Dalamud.Game.Text.SeStringHandling;
-using Dalamud.Game.Text.SeStringHandling.Payloads;
-using Dalamud.Hooking;
 using Dalamud.Interface.Components;
-using Dalamud.Memory;
 using Dalamud.Plugin;
-using ECommons;
 using ECommons.Automation.NeoTaskManager;
 using ECommons.DalamudServices;
-using ECommons.EzHookManager;
-using ECommons.GameHelpers;
-using FFXIVClientStructs.FFXIV.Client.Game;
-using FFXIVClientStructs.FFXIV.Client.Game.Control;
-using FFXIVClientStructs.FFXIV.Client.Game.UI;
-using FFXIVClientStructs.FFXIV.Component.GUI;
 using Lumina.Excel.Sheets;
 using Newtonsoft.Json;
 using YABOT.FeaturesSetup;
@@ -52,10 +39,6 @@ public abstract class BaseFeature
     public virtual System.Collections.Generic.IEnumerable<(string Command, string Aliases, string Description)> CommandReferences =>
         System.Array.Empty<(string, string, string)>();
 
-    public static readonly SeString YabotPayload = new SeString(new UIForegroundPayload(32))
-        .Append($"{SeIconChar.BoxedLetterY.ToIconString()}{SeIconChar.BoxedLetterA.ToIconString()}{SeIconChar.BoxedLetterB.ToIconString()}{SeIconChar.BoxedLetterO.ToIconString()}{SeIconChar.BoxedLetterT.ToIconString()} ")
-        .Append(new UIForegroundPayload(0));
-
     public virtual void Draw() { }
     public virtual bool DrawConditions() { return false; }
 
@@ -63,20 +46,11 @@ public abstract class BaseFeature
 
     public abstract FeatureType FeatureType { get; }
 
-    protected Stopwatch AFKTimer { get; private set; } = new Stopwatch();
-    protected bool UseAFKTimer { get; set; } = false;
-
-    protected bool IsAFK(int minutes = 5)
-    {
-        if (!UseAFKTimer) return false;
-        return AFKTimer.Elapsed.TotalMinutes >= minutes;
-    }
-
     public void InterfaceSetup(Plugin plugin, IDalamudPluginInterface pluginInterface, Configuration config, FeatureProvider fp)
     {
         this.config = config;
         this.Provider = fp;
-        this.TaskManager = new(new() { TimeoutSilently = true, ShowDebug = !UseAFKTimer });
+        this.TaskManager = new(new() { TimeoutSilently = true });
     }
 
     public virtual void Setup()
@@ -88,26 +62,12 @@ public abstract class BaseFeature
     {
         Svc.Log.Debug($"Enabling {Name} / {this.GetType().Name}");
         Enabled = true;
-        if (UseAFKTimer)
-            Svc.Framework.Update += UpdateTimer;
     }
 
     public virtual void Disable()
     {
         TaskManager!.Abort();
         Enabled = false;
-        Svc.Framework.Update -= UpdateTimer;
-    }
-
-    private void UpdateTimer(Dalamud.Plugin.Services.IFramework framework)
-    {
-        if ((Player.Available && Player.IsMoving) || Svc.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat])
-        {
-            if (!AFKTimer.IsRunning)
-                AFKTimer.Restart();
-        }
-        else
-            AFKTimer.Reset();
     }
 
     public virtual void Dispose()
@@ -358,179 +318,10 @@ public abstract class BaseFeature
 
     protected void Log(string msg) => Svc.Log.Debug($"[{Name}] {msg}");
 
-    public unsafe bool IsRpWalking()
-    {
-        return Control.Instance()->IsWalking;
-    }
-
-    internal static unsafe int GetInventoryFreeSlotCount()
-    {
-        var types = new InventoryType[] { InventoryType.Inventory1, InventoryType.Inventory2, InventoryType.Inventory3, InventoryType.Inventory4 };
-        var c = InventoryManager.Instance();
-        var slots = 0;
-        foreach (var x in types)
-        {
-            var inv = c->GetInventoryContainer(x);
-            for (var i = 0; i < inv->Size; i++)
-            {
-                if (inv->Items[i].ItemId == 0)
-                {
-                    slots++;
-                }
-            }
-        }
-        return slots;
-    }
-
-    internal static unsafe bool IsTargetLocked => *(byte*)(((nint)TargetSystem.Instance()) + 309) == 1;
-    internal static bool IsInventoryFree()
-    {
-        return GetInventoryFreeSlotCount() >= 1;
-    }
-
-    public unsafe bool IsMoving() => Player.IsMoving;
-
-    public void PrintModuleMessage(string msg)
-    {
-        var message = new XivChatEntry
-        {
-            Message = new SeStringBuilder()
-            .AddUiForeground($"[{P.Name}] ", 45)
-            .AddUiForeground($"[{Name}] ", 62)
-            .AddText(msg)
-            .Build()
-        };
-
-        Svc.Chat.Print(message);
-    }
-
-    public void PrintModuleMessage(SeString msg)
-    {
-        var message = new XivChatEntry
-        {
-            Message = new SeStringBuilder()
-            .AddUiForeground($"[{P.Name}] ", 45)
-            .AddUiForeground($"[{Name}] ", 62)
-            .Append(msg)
-            .Build()
-        };
-
-        Svc.Chat.Print(message);
-    }
-
-    private const int UnitListCount = 18;
-    public unsafe AtkUnitBase* GetAddonByID(uint id)
-    {
-        var unitManagers = &AtkStage.Instance()->RaptureAtkUnitManager->AtkUnitManager.DepthLayerOneList;
-        for (var i = 0; i < UnitListCount; i++)
-        {
-            var unitManager = &unitManagers[i];
-            foreach (var j in Enumerable.Range(0, Math.Min(unitManager->Count, unitManager->Entries.Length)))
-            {
-                var unitBase = unitManager->Entries[j].Value;
-                if (unitBase != null && unitBase->Id == id)
-                {
-                    return unitBase;
-                }
-            }
-        }
-
-        return null;
-    }
-
-    public unsafe bool IsActionUnlocked(uint id)
-    {
-        var unlockLink = Svc.Data.GetExcelSheet<Lumina.Excel.Sheets.Action>().GetRow(id).UnlockLink.RowId;
-        if (unlockLink == 0) return true;
-        return UIState.Instance()->IsUnlockLinkUnlockedOrQuestCompleted(unlockLink);
-    }
-
-    internal static unsafe AtkUnitBase* GetSpecificYesno(Predicate<string> compare)
-    {
-        for (var i = 1; i < 100; i++)
-        {
-            try
-            {
-                var addon = (AtkUnitBase*)Svc.GameGui.GetAddonByName("SelectYesno", i).Address;
-                if (addon == null) return null;
-                if (GenericHelpers.IsAddonReady(addon))
-                {
-                    var textNode = addon->UldManager.NodeList[15]->GetAsAtkTextNode();
-                    var text = MemoryHelper.ReadSeString(&textNode->NodeText).GetText();
-                    if (compare(text))
-                    {
-                        Svc.Log.Verbose($"SelectYesno {text} addon {i} by predicate");
-                        return addon;
-                    }
-                }
-            }
-            catch (Exception e)
-            {
-                Svc.Log.Error("", e);
-                return null;
-            }
-        }
-        return null;
-    }
-
-    internal static unsafe AtkUnitBase* GetSpecificYesno(params string[] s)
-    {
-        for (var i = 1; i < 100; i++)
-        {
-            try
-            {
-                var addon = (AtkUnitBase*)Svc.GameGui.GetAddonByName("SelectYesno", i).Address;
-                if (addon == null) return null;
-                if (GenericHelpers.IsAddonReady(addon))
-                {
-                    var textNode = addon->UldManager.NodeList[15]->GetAsAtkTextNode();
-                    var text = MemoryHelper.ReadSeString(&textNode->NodeText).GetText().Replace(" ", "");
-                    if (text.EqualsAny(s.Select(x => x.Replace(" ", ""))))
-                    {
-                        Svc.Log.Verbose($"SelectYesno {s.Print()} addon {i}");
-                        return addon;
-                    }
-                }
-            }
-            catch (Exception e)
-            {
-                Svc.Log.Error("", e);
-                return null;
-            }
-        }
-        return null;
-    }
-
-    public unsafe bool IsInDuty() => GameMain.Instance()->CurrentContentFinderConditionId > 0;
-
     public unsafe bool ZoneHasFlight()
     {
         if (Svc.Objects.LocalPlayer is null) return false;
         var territory = Svc.Data.Excel.GetSheet<TerritoryType>()?.GetRow(Svc.ClientState.TerritoryType);
         return territory?.TerritoryIntendedUse.RowId is 1 or 47 or 49;
     }
-
-    public unsafe bool UseAction(uint id)
-    {
-        var am = ActionManager.Instance();
-        if (am->GetActionStatus(ActionType.Action, id) != 0) return false;
-        return am->UseAction(ActionType.Action, id);
-    }
-
-    public delegate void SendActionDelegate(ulong targetObjectId, byte actionType, uint actionId, ushort sequence, long a5, long a6, long a7, long a8, long a9);
-    [EzHook("48 89 5C 24 ?? 48 89 6C 24 ?? 48 89 74 24 ?? 57 48 81 EC ?? ?? ?? ?? 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 84 24 ?? ?? ?? ?? 48 8B E9 41 0F B7 D9", detourName: nameof(SendActionDetour), false)]
-    public EzHook<SendActionDelegate>? SendActionHook;
-
-    public virtual void SendActionDetour(ulong targetObjectId, byte actionType, uint actionId, ushort sequence, long a5, long a6, long a7, long a8, long a9)
-        => SendActionHook?.Original(targetObjectId, actionType, actionId, sequence, a5, a6, a7, a8, a9);
-
-    [EzHook("E8 ?? ?? ?? ?? B0 01 EB B6", detourName: "UseActionDetour")]
-    public EzHook<ActionManager.Delegates.UseAction>? UseActionHook;
-
-    public virtual unsafe bool UseActionDetour(ActionManager* actionManager, ActionType actionType, uint actionId, ulong targetId, uint extraParam, ActionManager.UseActionMode mode, uint comboRouteId, bool* outOptAreaTargeted)
-        => UseActionHook!.Original(actionManager, actionType, actionId, targetId, extraParam, mode, comboRouteId, outOptAreaTargeted);
-
-    public unsafe Hook<T> HookFromVTable<T>(void* vtblAddress, int vfIndex, T detour) where T : Delegate => HookFromVTable((nint)vtblAddress, vfIndex, detour);
-    public unsafe Hook<T> HookFromVTable<T>(nint vtblAddress, int vfIndex, T detour) where T : Delegate => Svc.Hook.HookFromAddress(*(nint*)(vtblAddress + vfIndex * 0x08), detour);
-
 }

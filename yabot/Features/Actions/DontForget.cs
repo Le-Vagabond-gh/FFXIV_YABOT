@@ -14,7 +14,7 @@ using System.Reflection;
 
 namespace YABOT.Features.Actions
 {
-    public unsafe class DontForget : Feature
+    public unsafe class DontForget : BaseFeature
     {
         public override string Name => "Don't Forget";
 

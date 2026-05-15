@@ -10,7 +10,7 @@ using System;
 
 namespace YABOT.Features.Actions
 {
-    public sealed unsafe class AutoDismount : Feature
+    public sealed unsafe class AutoDismount : BaseFeature
     {
         public override string Name => "Auto-Dismount on Blocked Action";
 

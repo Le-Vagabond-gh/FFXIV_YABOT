@@ -3,7 +3,7 @@ using YABOT.FeaturesSetup;
 
 namespace YABOT.Features.PluginMods
 {
-    public abstract class PluginModFeature : Feature
+    public abstract class PluginModFeature : BaseFeature
     {
         public abstract string RequiredPluginName { get; }
 

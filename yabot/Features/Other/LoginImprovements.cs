@@ -134,7 +134,7 @@ namespace YABOT.Features.Other
     //
     // ============================================================================
 
-    public unsafe class LoginImprovements : Feature
+    public unsafe class LoginImprovements : BaseFeature
     {
         public override string Name => "Login Improvements";
 

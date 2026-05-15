@@ -4,15 +4,15 @@ using ECommons.DalamudServices;
 using FFXIVClientStructs.FFXIV.Client.Game.Group;
 using FFXIVClientStructs.FFXIV.Client.UI.Info;
 using FFXIVClientStructs.FFXIV.Client.UI.Misc;
-using Lumina.Excel.Sheets;
 using YABOT.FeaturesSetup;
+using YABOT.Helpers;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 
 namespace YABOT.Features.OccultCrescent;
 
-public unsafe class AutoInviteOccult : Feature
+public unsafe class AutoInviteOccult : BaseFeature
 {
     public override string Name => "Auto-Invite in Occult Crescent";
 
@@ -40,7 +40,7 @@ public unsafe class AutoInviteOccult : Feature
 
     private void OnChatMessage(IHandleableChatMessage chatMessage)
     {
-        if (!IsInOccultCrescent()) return;
+        if (!ZoneHelper.IsOccultCrescent()) return;
 
         var text = chatMessage.Message.TextValue;
         if (!ContainsLfg(text)) return;
@@ -123,16 +123,6 @@ public unsafe class AutoInviteOccult : Feature
             Svc.Log.Error(ex, "[AutoInviteOccult] CanInvite check failed");
             return false;
         }
-    }
-
-    private bool IsInOccultCrescent()
-    {
-        try
-        {
-            var territory = Svc.Data.GetExcelSheet<TerritoryType>().First(x => x.RowId == Svc.ClientState.TerritoryType);
-            return territory.TerritoryIntendedUse.RowId == 61;
-        }
-        catch { return false; }
     }
 
     public override void Disable()

@@ -8,7 +8,7 @@ using YABOT.FeaturesSetup;
 
 namespace YABOT.Features.UI
 {
-    public unsafe class AutoOpenLootWindow : Feature
+    public unsafe class AutoOpenLootWindow : BaseFeature
     {
         public override string Name => "Auto Open Loot Window";
 

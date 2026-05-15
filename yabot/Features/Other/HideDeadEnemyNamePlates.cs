@@ -4,7 +4,7 @@ using YABOT.FeaturesSetup;
 
 namespace YABOT.Features.Other
 {
-    public class HideDeadEnemyNamePlates : Feature
+    public class HideDeadEnemyNamePlates : BaseFeature
     {
         public override string Name => "Hide Dead Enemy Nameplates";
 

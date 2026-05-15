@@ -1,15 +1,14 @@
 using ECommons.DalamudServices;
 using FFXIVClientStructs.FFXIV.Client.Game.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Misc;
-using Lumina.Excel.Sheets;
 using YABOT.FeaturesSetup;
+using YABOT.Helpers;
 using Dalamud.Game.ClientState.Conditions;
 using System;
-using System.Linq;
 
 namespace YABOT.Features.OccultCrescent
 {
-    public unsafe class AutoSwitchOccultGearset : Feature
+    public unsafe class AutoSwitchOccultGearset : BaseFeature
     {
         public override string Name => "Auto-Switch Occult Gearset";
 
@@ -34,7 +33,7 @@ namespace YABOT.Features.OccultCrescent
 
         private void OnTerritoryChanged(uint territoryId)
         {
-            if (IsOccultCrescent(territoryId))
+            if (ZoneHelper.IsOccultCrescent(territoryId))
             {
                 wasInOccultCrescent = true;
                 targetGearsetId = -1;
@@ -108,16 +107,6 @@ namespace YABOT.Features.OccultCrescent
 
             previousGearsetId = -1;
             return true;
-        }
-
-        private bool IsOccultCrescent(uint territoryId)
-        {
-            try
-            {
-                var territory = Svc.Data.GetExcelSheet<TerritoryType>().First(x => x.RowId == territoryId);
-                return territory.TerritoryIntendedUse.RowId == 61;
-            }
-            catch { return false; }
         }
 
         public override void Disable()

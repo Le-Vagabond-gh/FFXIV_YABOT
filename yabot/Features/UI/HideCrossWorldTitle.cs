@@ -9,7 +9,7 @@ using YABOT.FeaturesSetup;
 
 namespace YABOT.Features.UI
 {
-    public class HideCrossWorldTitle : Feature
+    public class HideCrossWorldTitle : BaseFeature
     {
         public override string Name => "Hide Cross-World Title";
 

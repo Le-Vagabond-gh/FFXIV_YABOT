@@ -22,11 +22,11 @@ namespace YABOT.FeaturesSetup
 
         public virtual void LoadFeatures()
         {
-            foreach (var t in Assembly.GetTypes().Where(x => x.IsSubclassOf(typeof(Feature)) && !x.IsAbstract))
+            foreach (var t in Assembly.GetTypes().Where(x => x.IsSubclassOf(typeof(BaseFeature)) && !x.IsAbstract))
             {
                 try
                 {
-                    var feature = (Feature)Activator.CreateInstance(t)!;
+                    var feature = (BaseFeature)Activator.CreateInstance(t)!;
                     feature.InterfaceSetup(P, Svc.PluginInterface, Config, this);
                     feature.Setup();
                     Plugin.ApplyUserPreference(feature);

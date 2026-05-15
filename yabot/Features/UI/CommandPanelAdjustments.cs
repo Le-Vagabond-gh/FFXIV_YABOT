@@ -8,7 +8,7 @@ using YABOT.FeaturesSetup;
 
 namespace YABOT.Features.UI
 {
-    public unsafe class CommandPanelAdjustments : Feature
+    public unsafe class CommandPanelAdjustments : BaseFeature
     {
         public override string Name => "Command Panel Adjustments";
 

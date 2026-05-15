@@ -13,7 +13,7 @@ using System.Numerics;
 
 namespace YABOT.Features.UI;
 
-public unsafe class CommendationOverlay : Feature
+public unsafe class CommendationOverlay : BaseFeature
 {
     public override string Name => "Commendation Tracker";
 

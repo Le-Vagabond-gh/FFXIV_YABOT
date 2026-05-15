@@ -11,7 +11,7 @@ using YABOT.FeaturesSetup;
 
 namespace YABOT.Features.UI
 {
-    public unsafe class ResourceBarPercentages : Feature
+    public unsafe class ResourceBarPercentages : BaseFeature
     {
         public override string Name => "Resource Bars as Percentages";
 

@@ -7,7 +7,7 @@ using YABOT.FeaturesSetup;
 
 namespace YABOT.Features.UI
 {
-    public unsafe class SelectNextLootItem : Feature
+    public unsafe class SelectNextLootItem : BaseFeature
     {
         public override string Name => "Auto Select Next Loot Item";
 

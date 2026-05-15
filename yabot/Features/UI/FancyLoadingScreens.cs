@@ -25,7 +25,7 @@ namespace YABOT.Features.UI
     // a second AFTER _LocationTitle.PreDraw, producing a visible delay. Polling
     // GameMain.NextTerritoryTypeId from Framework.Update produced wrong / stuck textures
     // because the field's update timing relative to PreDraw is inconsistent.
-    public unsafe class FancyLoadingScreens : Feature
+    public unsafe class FancyLoadingScreens : BaseFeature
     {
         public override string Name => "Fancy Loading Screens";
 

@@ -14,7 +14,7 @@ using System.Numerics;
 
 namespace YABOT.Features.UI
 {
-    public unsafe class ChocoboXPOverlay : Feature
+    public unsafe class ChocoboXPOverlay : BaseFeature
     {
         private const uint DefaultChocoboIconId = 62143;
 

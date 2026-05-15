@@ -11,6 +11,7 @@ using FFXIVClientStructs.FFXIV.Client.Game.InstanceContent;
 using Lumina.Excel;
 using Lumina.Excel.Sheets;
 using YABOT.FeaturesSetup;
+using YABOT.Helpers;
 using YABOT.UI;
 using System;
 using System.Collections.Generic;
@@ -20,7 +21,7 @@ using static ECommons.GenericHelpers;
 
 namespace YABOT.Features.OccultCrescent
 {
-    public unsafe class KnowledgeCrystalBuffs : Feature
+    public unsafe class KnowledgeCrystalBuffs : BaseFeature
     {
         public override string Name => "Knowledge Crystal Buffs";
         public override string Description => "Shows a button near Knowledge Crystals to apply all available phantom job buffs. Also available as /ykcb command.";
@@ -99,16 +100,6 @@ namespace YABOT.Features.OccultCrescent
             base.Disable();
         }
 
-        private bool IsInOccultCrescent()
-        {
-            try
-            {
-                var territory = Svc.Data.GetExcelSheet<TerritoryType>().First(x => x.RowId == Svc.ClientState.TerritoryType);
-                return territory.TerritoryIntendedUse.RowId == 61;
-            }
-            catch { return false; }
-        }
-
         private const uint KnowledgeCrystalBaseId = 2007457;
 
         private bool IsNearAetheryte()
@@ -151,7 +142,7 @@ namespace YABOT.Features.OccultCrescent
 
         public override bool DrawConditions()
         {
-            if (!IsInOccultCrescent()) return false;
+            if (!ZoneHelper.IsOccultCrescent()) return false;
             try { EnsureDataLoaded(); } catch { }
             return ShowCrystalOverlay() || ShowTreasuresightOverlay() || ShowSuspendOverlay();
         }
@@ -330,7 +321,7 @@ namespace YABOT.Features.OccultCrescent
                     return;
                 }
 
-                if (!IsInOccultCrescent())
+                if (!ZoneHelper.IsOccultCrescent())
                 {
                     Svc.Chat.PrintError("[YABOT] Not in Occult Crescent.");
                     return;

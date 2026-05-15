@@ -14,13 +14,14 @@ using FFXIVClientStructs.FFXIV.Client.UI;
 using YABOT.FeaturesSetup;
 using YABOT.Helpers;
 using System;
+using static YABOT.Helpers.ZoneHelper;
 using System.Linq;
 using PlayerState = FFXIVClientStructs.FFXIV.Client.Game.UI.PlayerState;
 using static ECommons.GenericHelpers;
 
 namespace YABOT.Features.Actions
 {
-    public unsafe class AutoMountCombat : Feature
+    public unsafe class AutoMountCombat : BaseFeature
     {
         public override string Name => "Auto-Mount After Combat";
 
@@ -66,7 +67,7 @@ namespace YABOT.Features.Actions
         private void OnSelectYesnoSetup(AddonEvent type, AddonArgs args)
         {
             if (!Config.AutoConfirmReturnInOccultCrescent) return;
-            if (!IsOccultCrescentZone()) return;
+            if (!IsOccultCrescent()) return;
             if (Svc.Condition[ConditionFlag.Unconscious]) return;
 
             try
@@ -84,12 +85,6 @@ namespace YABOT.Features.Actions
             catch { }
         }
 
-        private bool IsOccultCrescentZone()
-        {
-            var territory = Svc.Data.GetExcelSheet<TerritoryType>().First(x => x.RowId == Svc.ClientState.TerritoryType);
-            return territory.TerritoryIntendedUse.RowId == 61;
-        }
-
         private void RunFeature(ConditionFlag flag, bool value)
         {
             if (flag == ConditionFlag.InCombat && !value)
@@ -99,7 +94,7 @@ namespace YABOT.Features.Actions
                 TaskManager.EnqueueDelay((int)(Config.ThrottleF * 1000));
                 TaskManager.Enqueue(() =>
                 {
-                    if (IsOccultCrescent())
+                    if (Config.ExcludeOccultCrescent && IsOccultCrescent())
                     {
                         if (Config.UseReturnInOccultCrescent)
                         {
@@ -123,12 +118,6 @@ namespace YABOT.Features.Actions
                     });
                 });
             }
-        }
-
-        private bool IsOccultCrescent()
-        {
-            if (!Config.ExcludeOccultCrescent) return false;
-            return IsOccultCrescentZone();
         }
 
         private bool? TryReturn()
@@ -175,7 +164,7 @@ namespace YABOT.Features.Actions
                 return false;
             }
 
-            if (Config.ExcludeOccultCrescent && territory.TerritoryIntendedUse.RowId == 61)
+            if (Config.ExcludeOccultCrescent && IsOccultCrescent())
             {
                 TaskManager.Abort();
                 return false;

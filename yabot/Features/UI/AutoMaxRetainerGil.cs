@@ -6,7 +6,7 @@ using YABOT.FeaturesSetup;
 
 namespace YABOT.Features.UI
 {
-    public unsafe class AutoMaxRetainerGil : Feature
+    public unsafe class AutoMaxRetainerGil : BaseFeature
     {
         public override string Name => "Auto-Fill Max Retainer Gil";
 

@@ -10,9 +10,9 @@ namespace YABOT.UI
 {
     internal class Overlays : Window
     {
-        private Feature Feature { get; set; }
+        private BaseFeature Feature { get; set; }
 
-        public Overlays(Feature t) : base($"###Overlay{t.Name}",
+        public Overlays(BaseFeature t) : base($"###Overlay{t.Name}",
             ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoBackground |
             ImGuiWindowFlags.AlwaysUseWindowPadding | ImGuiWindowFlags.AlwaysAutoResize, true)
         {

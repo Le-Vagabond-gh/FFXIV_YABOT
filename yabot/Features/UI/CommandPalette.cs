@@ -16,7 +16,7 @@ using System.Numerics;
 
 namespace YABOT.Features.UI
 {
-    public class CommandPalette : Feature
+    public class CommandPalette : BaseFeature
     {
         public override string Name => "Command Palette";
 

@@ -12,7 +12,7 @@ using LSeStringBuilder = Lumina.Text.SeStringBuilder;
 
 namespace YABOT.Features.UI
 {
-    public unsafe class ChatPlayerTooltip : Feature
+    public unsafe class ChatPlayerTooltip : BaseFeature
     {
         public override string Name => "Chat Player Tooltip";
 

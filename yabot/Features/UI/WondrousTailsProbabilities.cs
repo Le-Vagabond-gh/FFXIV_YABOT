@@ -14,7 +14,7 @@ using YABOT.FeaturesSetup;
 
 namespace YABOT.Features.UI
 {
-    public unsafe class WondrousTailsProbabilities : Feature
+    public unsafe class WondrousTailsProbabilities : BaseFeature
     {
         public override string Name => "Wondrous Tails Probabilities";
 

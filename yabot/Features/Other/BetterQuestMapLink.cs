@@ -8,7 +8,7 @@ using MapType = FFXIVClientStructs.FFXIV.Client.UI.Agent.MapType;
 
 namespace YABOT.Features.Other
 {
-    public unsafe class BetterQuestMapLink : Feature
+    public unsafe class BetterQuestMapLink : BaseFeature
     {
         public override string Name => "Better Quest Map Link";
 

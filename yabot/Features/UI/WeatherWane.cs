@@ -15,7 +15,7 @@ using System.Numerics;
 
 namespace YABOT.Features.UI
 {
-    public class WeatherWane : Feature
+    public class WeatherWane : BaseFeature
     {
         public override string Name => "Weather Forecast";
 

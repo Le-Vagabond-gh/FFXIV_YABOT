@@ -9,7 +9,7 @@ using YABOT.FeaturesSetup;
 
 namespace YABOT.Features.Other
 {
-    public unsafe class SkipTeleportConfirm : Feature
+    public unsafe class SkipTeleportConfirm : BaseFeature
     {
         public override string Name => "Skip Teleport Confirm";
 

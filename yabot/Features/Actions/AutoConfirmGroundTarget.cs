@@ -6,7 +6,7 @@ using Dalamud.Plugin.Services;
 
 namespace YABOT.Features.Actions
 {
-    public unsafe class AutoConfirmGroundTarget : Feature
+    public unsafe class AutoConfirmGroundTarget : BaseFeature
     {
         public override string Name => "Auto-Confirm Ground Targets";
 

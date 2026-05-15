@@ -15,7 +15,7 @@ using System.Numerics;
 
 namespace YABOT.Features.UI
 {
-    public unsafe class ArmourySortButton : Feature
+    public unsafe class ArmourySortButton : BaseFeature
     {
         public override string Name => "Armoury Chest Sort Button";
 

@@ -9,7 +9,7 @@ using System;
 
 namespace YABOT.Features.UI
 {
-    public class SearchConsoleGamesWiki : Feature
+    public class SearchConsoleGamesWiki : BaseFeature
     {
         public override string Name => "Search Console Games Wiki";
 

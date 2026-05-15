@@ -13,7 +13,7 @@ using System.Numerics;
 
 namespace YABOT.Features.UI
 {
-    public unsafe class AutoCloseEmotePanel : Feature
+    public unsafe class AutoCloseEmotePanel : BaseFeature
     {
         public override string Name => "Auto-Close Emote Panel";
 

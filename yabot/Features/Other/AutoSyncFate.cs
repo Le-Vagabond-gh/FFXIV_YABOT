@@ -14,7 +14,7 @@ using System.Linq;
 
 namespace YABOT.Features.Other
 {
-    public unsafe class AutoSyncFate : Feature
+    public unsafe class AutoSyncFate : BaseFeature
     {
         private ushort fateID;
         private bool pendingSync;

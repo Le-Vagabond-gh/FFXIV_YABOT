@@ -6,7 +6,7 @@ using YABOT.FeaturesSetup;
 
 namespace YABOT.Features.UI
 {
-    public unsafe class AutoConfirmRepair : Feature
+    public unsafe class AutoConfirmRepair : BaseFeature
     {
         public override string Name => "Auto-Confirm Repair Complete";
 

@@ -7,7 +7,7 @@ using YABOT.FeaturesSetup;
 
 namespace YABOT.Features.Other
 {
-    public class AutoDisplayNameSettings : Feature
+    public class AutoDisplayNameSettings : BaseFeature
     {
         public override string Name => "Auto Display Name Settings";
 
