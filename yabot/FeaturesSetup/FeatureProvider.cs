@@ -29,12 +29,7 @@ namespace YABOT.FeaturesSetup
                     var feature = (Feature)Activator.CreateInstance(t)!;
                     feature.InterfaceSetup(P, Svc.PluginInterface, Config, this);
                     feature.Setup();
-                    if ((feature.Ready && Config.EnabledFeatures.Contains(t.Name)) || feature.FeatureType == FeatureType.Commands)
-                    {
-                        if (!feature.FeatureDisabled)
-                            feature.Enable();
-                    }
-
+                    Plugin.ApplyUserPreference(feature);
                     Features.Add(feature);
                 }
                 catch (Exception ex)

@@ -117,7 +117,11 @@ internal class MainWindow : Window
                 }
                 else if (OpenWindow == EnabledLabel)
                 {
-                    var enabledFeatures = P.Features.Where(f => f.Enabled).ToArray();
+                    // Match the checkbox: show features the user has enabled in config, even if
+                    // their dependency is currently missing and the runtime feature isn't active.
+                    var enabledFeatures = P.Features
+                        .Where(f => Config.EnabledFeatures.Contains(f.GetType().Name))
+                        .ToArray();
                     DrawFeatures(enabledFeatures, header: EnabledLabel);
                 }
                 else
@@ -213,29 +217,24 @@ internal class MainWindow : Window
             // CommandFeatures are documented in the command table; they don't have a checkbox toggle.
             if (feature is CommandFeature) continue;
 
+            // Checkbox reflects the user's persisted preference, not the runtime Enabled state.
+            // The two are decoupled: a user can have a feature checked even when its dependency
+            // isn't loaded (checkbox stays checked but greyed out via ImRaii.Disabled below).
+            // When the dependency becomes available, Plugin.SyncPluginModFeatures applies the
+            // saved preference automatically.
+            var key = feature.GetType().Name;
+            var userWants = Config.EnabledFeatures.Contains(key);
             using (ImRaii.Disabled(feature.FeatureDisabled))
             {
-                var enabled = feature.Enabled;
-                if (ImGui.Checkbox($"###{feature.Name}", ref enabled))
+                var toggled = userWants;
+                if (ImGui.Checkbox($"###{feature.Name}", ref toggled))
                 {
-                    if (enabled)
-                    {
-                        try
-                        {
-                            feature.Enable();
-                            if (feature.Enabled) Config.EnabledFeatures.Add(feature.GetType().Name);
-                        }
-                        catch (Exception ex) { Svc.Log.Error(ex, $"Failed to enable {feature.Name}"); }
-                    }
-                    else
-                    {
-                        try
-                        {
-                            feature.Disable();
-                            Config.EnabledFeatures.RemoveAll(x => x == feature.GetType().Name);
-                        }
-                        catch (Exception ex) { Svc.Log.Error(ex, $"Failed to disable {feature.Name}"); }
-                    }
+                    if (toggled && !Config.EnabledFeatures.Contains(key))
+                        Config.EnabledFeatures.Add(key);
+                    else if (!toggled)
+                        Config.EnabledFeatures.RemoveAll(x => x == key);
+
+                    Plugin.ApplyUserPreference(feature);
                     Config.Save();
                 }
                 ImGui.SameLine();

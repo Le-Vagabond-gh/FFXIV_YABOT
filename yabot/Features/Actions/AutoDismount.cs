@@ -32,7 +32,7 @@ namespace YABOT.Features.Actions
             vnavIsRunning = Svc.PluginInterface.GetIpcSubscriber<bool>("vnavmesh.Path.IsRunning");
             vnavPathfindInProgress = Svc.PluginInterface.GetIpcSubscriber<bool>("vnavmesh.SimpleMove.PathfindInProgress");
 
-            useActionHook = Svc.Hook.HookFromAddress<UseActionDelegate>(
+            useActionHook ??= Svc.Hook.HookFromAddress<UseActionDelegate>(
                 (nint)ActionManager.MemberFunctionPointers.UseAction,
                 UseActionDetour);
             useActionHook.Enable();

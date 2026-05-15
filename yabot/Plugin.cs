@@ -4,7 +4,9 @@ using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using ECommons;
 using ECommons.DalamudServices;
+using ECommons.Reflection;
 using YABOT.Features;
+using YABOT.Features.PluginMods;
 using YABOT.FeaturesSetup;
 using YABOT.UI;
 using System.Collections.Generic;
@@ -67,6 +69,8 @@ public sealed class Plugin : IDalamudPlugin
         provider.LoadFeatures();
         FeatureProviders.Add(provider);
 
+        DalamudReflector.RegisterOnInstalledPluginsChangedEvents(SyncPluginModFeatures);
+
         Svc.Log.Info($"YABOT initialized - {Punchline}");
     }
 
@@ -128,5 +132,38 @@ public sealed class Plugin : IDalamudPlugin
     public void ToggleMain()
     {
         if (MainWindow != null) MainWindow.IsOpen = !MainWindow.IsOpen;
+    }
+
+    // Reconciles a feature's runtime state with the user's saved preference. CommandFeatures
+    // are always wanted (they expose chat commands that need to exist for discovery). All others
+    // follow the EnabledFeatures list. FeatureDisabled gates Enable() but not Disable() so a
+    // dependency disappearing won't reverse the user's choice in config.
+    internal static void ApplyUserPreference(BaseFeature feature)
+    {
+        if (!feature.Ready) return;
+
+        var wants = feature.FeatureType == FeatureType.Commands
+            || Config.EnabledFeatures.Contains(feature.GetType().Name);
+
+        try
+        {
+            if (wants && !feature.Enabled && !feature.FeatureDisabled)
+                feature.Enable();
+            else if (!wants && feature.Enabled)
+                feature.Disable();
+        }
+        catch (System.Exception ex)
+        {
+            Svc.Log.Error(ex, $"ApplyUserPreference failed for {feature.Name}");
+        }
+    }
+
+    // When an external plugin loads or unloads, re-apply the user's saved preference to every
+    // feature - in practice only PluginModFeatures change state here, but iterating all is harmless
+    // and keeps the routine uniform with LoadFeatures and the MainWindow toggle.
+    private void SyncPluginModFeatures()
+    {
+        foreach (var feature in Features)
+            ApplyUserPreference(feature);
     }
 }

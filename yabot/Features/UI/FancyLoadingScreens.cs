@@ -82,7 +82,7 @@ namespace YABOT.Features.UI
             loadings = Svc.Data.GetExcelSheet<LoadingImageRow>();
             cfcs = Svc.Data.GetExcelSheet<ContentFinderCondition>();
 
-            showLocationTitleHook = Svc.Hook.HookFromAddress<ShowLocationTitleDelegate>(
+            showLocationTitleHook ??= Svc.Hook.HookFromAddress<ShowLocationTitleDelegate>(
                 (nint)UIModule.StaticVirtualTablePointer->ShowLocationTitle,
                 ShowLocationTitleDetour);
             showLocationTitleHook.Enable();

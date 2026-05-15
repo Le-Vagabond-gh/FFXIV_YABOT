@@ -62,6 +62,8 @@ public abstract partial class CommandFeature : Feature
                 registeredCommands.Add(a);
             }
         }
+
+        base.Enable();
     }
 
     public override void Disable()
