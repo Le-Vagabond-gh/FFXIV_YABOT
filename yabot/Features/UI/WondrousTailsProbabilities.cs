@@ -5,7 +5,7 @@ using System.Threading.Tasks;
 using Dalamud.Game.Addon.Lifecycle;
 using Dalamud.Game.Addon.Lifecycle.AddonArgTypes;
 using Dalamud.Game.Text.SeStringHandling;
-using Dalamud.Memory;
+using Dalamud.Plugin.Services;
 using ECommons.DalamudServices;
 using FFXIVClientStructs.FFXIV.Client.Game.UI;
 using FFXIVClientStructs.FFXIV.Client.UI;
@@ -24,7 +24,8 @@ namespace YABOT.Features.UI
         public override FeatureType FeatureType => FeatureType.UI;
 
         private PerfectTails? solver;
-        private string? originalHelpText;
+        private readonly bool[] lastStickerState = new bool[16];
+        private bool lastStickerStateInitialized;
 
         public override void Enable()
         {
@@ -44,6 +45,7 @@ namespace YABOT.Features.UI
             Svc.AddonLifecycle.RegisterListener(AddonEvent.PostSetup, "WeeklyBingo", OnWeeklyBingoChanged);
             Svc.AddonLifecycle.RegisterListener(AddonEvent.PostRefresh, "WeeklyBingo", OnWeeklyBingoChanged);
             Svc.AddonLifecycle.RegisterListener(AddonEvent.PreFinalize, "WeeklyBingo", OnWeeklyBingoFinalize);
+            Svc.Framework.Update += OnFrameworkUpdate;
             base.Enable();
         }
 
@@ -56,11 +58,35 @@ namespace YABOT.Features.UI
 
         public override void Disable()
         {
+            Svc.Framework.Update -= OnFrameworkUpdate;
             Svc.AddonLifecycle.UnregisterListener(OnWeeklyBingoChanged);
             Svc.AddonLifecycle.UnregisterListener(OnWeeklyBingoFinalize);
             RestoreOriginalText();
             solver = null;
+            lastStickerStateInitialized = false;
             base.Disable();
+        }
+
+        private void OnFrameworkUpdate(IFramework framework)
+        {
+            try
+            {
+                if (solver == null) return;
+
+                var changed = !lastStickerStateInitialized;
+                for (var i = 0; i < 16; i++)
+                {
+                    var placed = PlayerState.Instance()->IsWeeklyBingoStickerPlaced(i);
+                    if (placed != lastStickerState[i]) { changed = true; lastStickerState[i] = placed; }
+                }
+                lastStickerStateInitialized = true;
+                if (!changed) return;
+
+                var addon = (AddonWeeklyBingo*)Svc.GameGui.GetAddonByName("WeeklyBingo").Address;
+                if (addon == null || !((AtkUnitBase*)addon)->IsVisible) return;
+                ApplyProbabilityText(addon);
+            }
+            catch { /* defensive: never crash the game from Framework.Update */ }
         }
 
         private void OnWeeklyBingoChanged(AddonEvent type, AddonArgs args)
@@ -75,23 +101,10 @@ namespace YABOT.Features.UI
                 var textNode = addon->GetTextNodeById(34);
                 if (textNode == null) return;
 
-                if (originalHelpText == null)
-                    originalHelpText = MemoryHelper.ReadSeString(&textNode->NodeText).TextValue;
-
-                // Sync solver state from the game.
                 for (var i = 0; i < 16; i++)
                     solver.GameState[i] = PlayerState.Instance()->IsWeeklyBingoStickerPlaced(i);
 
-                var truncatedHelp = TruncateAtDoubleNewline(originalHelpText);
-                var probabilityString = solver.SolveAndGetProbabilitySeString();
-
-                var combined = new SeStringBuilder()
-                    .AddText(truncatedHelp.TrimEnd())
-                    .AddText("\n\n")
-                    .Append(probabilityString)
-                    .Build();
-
-                textNode->SetText(combined.Encode());
+                textNode->SetText(solver.SolveAndGetProbabilitySeString().Encode());
             }
             catch (Exception e)
             {
@@ -104,26 +117,8 @@ namespace YABOT.Features.UI
 
         private void RestoreOriginalText()
         {
-            try
-            {
-                var addon = (AddonWeeklyBingo*)Svc.GameGui.GetAddonByName("WeeklyBingo").Address;
-                if (addon == null) { originalHelpText = null; return; }
-
-                var textNode = addon->GetTextNodeById(34);
-                if (textNode != null && originalHelpText != null)
-                    textNode->SetText(originalHelpText);
-            }
-            catch { /* addon may already be gone; ignore */ }
-            finally
-            {
-                originalHelpText = null;
-            }
-        }
-
-        private static string TruncateAtDoubleNewline(string text)
-        {
-            var idx = text.IndexOf("\n\n", StringComparison.Ordinal);
-            return idx < 0 ? text : text[..idx];
+            // No-op: the game refills node 34 with its own help text on the next refresh.
+            // We don't need to restore anything explicitly.
         }
     }
 
