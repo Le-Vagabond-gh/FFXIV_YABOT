@@ -45,7 +45,10 @@ namespace YABOT.Features.Other
             [FeatureConfigOption("Don't trigger when in combat", "", 6)]
             public bool ExcludeCombat = false;
 
-            [FeatureConfigOption("Auto-confirm FATE NPC start dialogs", "", 7)]
+            [FeatureConfigOption("Don't trigger when mounted", "", 7)]
+            public bool ExcludeMounted = true;
+
+            [FeatureConfigOption("Auto-confirm FATE NPC start dialogs", "", 8)]
             public bool AutoConfirmFateDialog = false;
         }
 
@@ -92,6 +95,7 @@ namespace YABOT.Features.Other
                 if (zone.ExVersion.RowId == 3 && Config.ExcludeShB) return;
                 if (zone.ExVersion.RowId == 4 && Config.ExcludeEW) return;
                 if (Svc.Condition[ConditionFlag.InCombat] && Config.ExcludeCombat) return;
+                if ((Svc.Condition[ConditionFlag.Mounted] || Svc.Condition[ConditionFlag.RidingPillion]) && Config.ExcludeMounted) return;
                 if (Svc.Objects.LocalPlayer?.ClassJob.Value.ClassJobCategory is { RowId: 32 or 33 }) return;
 
                 if (Svc.Objects.LocalPlayer?.Level > FateMaxLevel)
