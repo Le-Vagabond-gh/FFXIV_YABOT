@@ -11,6 +11,7 @@ using Dalamud.Bindings.ImGui;
 using Lumina.Excel.Sheets;
 using ECommons.UIHelpers.AddonMasterImplementations;
 using FFXIVClientStructs.FFXIV.Client.UI;
+using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using YABOT.FeaturesSetup;
 using YABOT.Helpers;
 using System;
@@ -39,6 +40,7 @@ namespace YABOT.Features.Actions
             public bool ExcludeOccultCrescent = false;
             public bool UseReturnInOccultCrescent = false;
             public bool AutoConfirmReturnInOccultCrescent = false;
+            public bool AutoMountAfterAetheryteInOccultCrescent = false;
             public bool JumpAfterMount = false;
         }
 
@@ -50,6 +52,8 @@ namespace YABOT.Features.Actions
         private Hook<TeleportDelegate>? teleportHook;
         private delegate bool TeleportWithTicketsDelegate(Telepo.SelectUseTicketInvoker* invoker, uint aetheryteId, byte subIndex);
         private Hook<TeleportWithTicketsDelegate>? teleportWithTicketsHook;
+        private delegate void AethernetTeleportDelegate(AgentTelepotTown* agent, byte index);
+        private Hook<AethernetTeleportDelegate>? aethernetTeleportHook;
         private long mountActionTime;
 
         public override void Enable()
@@ -59,6 +63,8 @@ namespace YABOT.Features.Actions
             teleportHook?.Enable();
             teleportWithTicketsHook ??= Svc.Hook.HookFromAddress<TeleportWithTicketsDelegate>((nint)Telepo.SelectUseTicketInvoker.Addresses.TeleportWithTickets.Value, TeleportWithTicketsDetour);
             teleportWithTicketsHook?.Enable();
+            aethernetTeleportHook ??= Svc.Hook.HookFromAddress<AethernetTeleportDelegate>((nint)AgentTelepotTown.Addresses.TeleportToAetheryte.Value, AethernetTeleportDetour);
+            aethernetTeleportHook?.Enable();
             Svc.Condition.ConditionChange += RunFeature;
             Svc.AddonLifecycle.RegisterListener(AddonEvent.PostSetup, "SelectYesno", OnSelectYesnoSetup);
             base.Enable();
@@ -104,7 +110,7 @@ namespace YABOT.Features.Actions
                         return;
                     }
 
-                    TaskManager.EnqueueWithTimeout(TryMount, 3000);
+                    TaskManager.EnqueueWithTimeout(() => TryMount(), 3000);
                     TaskManager.Enqueue(() =>
                     {
                         if (Config.JumpAfterMount && ZoneHasFlight())
@@ -118,6 +124,45 @@ namespace YABOT.Features.Actions
                     });
                 });
             }
+
+        }
+
+        private unsafe void AethernetTeleportDetour(AgentTelepotTown* agent, byte index)
+        {
+            try
+            {
+                if (Config.AutoMountAfterAetheryteInOccultCrescent && IsOccultCrescent())
+                    QueueMountAfterAetheryte();
+            }
+            catch (Exception ex)
+            {
+                Svc.Log.Error(ex, "[AutoMountCombat] AethernetTeleportDetour failed");
+            }
+            aethernetTeleportHook!.Original(agent, index);
+        }
+
+        private void QueueMountAfterAetheryte()
+        {
+            TaskManager.EnqueueWithTimeout(() => Svc.Condition[ConditionFlag.BetweenAreas] || Svc.Condition[ConditionFlag.BetweenAreas51], 5000);
+            TaskManager.EnqueueWithTimeout(() => !Svc.Condition[ConditionFlag.BetweenAreas] && !Svc.Condition[ConditionFlag.BetweenAreas51], 15000);
+            TaskManager.EnqueueWithTimeout(() => Svc.Objects.LocalPlayer != null, 10000);
+            TaskManager.EnqueueDelay(300);
+            TaskManager.Enqueue(() =>
+            {
+                if (!IsOccultCrescent()) return;
+                if (Svc.Condition[ConditionFlag.InCombat]) return;
+                if (Svc.Condition[ConditionFlag.Mounted]) return;
+
+                TaskManager.EnqueueWithTimeout(() => TryMount(bypassOcExclude: true), 5000);
+                if (Config.JumpAfterMount && ZoneHasFlight())
+                {
+                    TaskManager.EnqueueWithTimeout(() => Svc.Condition[ConditionFlag.Mounted], 5000);
+                    TaskManager.EnqueueDelay(50);
+                    TaskManager.Enqueue(() => ActionManager.Instance()->UseAction(ActionType.GeneralAction, 2));
+                    TaskManager.EnqueueDelay(50);
+                    TaskManager.Enqueue(() => ActionManager.Instance()->UseAction(ActionType.GeneralAction, 2));
+                }
+            });
         }
 
         private bool? TryReturn()
@@ -146,7 +191,7 @@ namespace YABOT.Features.Actions
             catch { }
             return false;
         }
-        private bool? TryMount()
+        private bool? TryMount(bool bypassOcExclude = false)
         {
             if (Svc.Objects.LocalPlayer is null) return false;
             if (Svc.Condition[ConditionFlag.InCombat]) return false;
@@ -164,7 +209,7 @@ namespace YABOT.Features.Actions
                 return false;
             }
 
-            if (Config.ExcludeOccultCrescent && IsOccultCrescent())
+            if (!bypassOcExclude && Config.ExcludeOccultCrescent && IsOccultCrescent())
             {
                 TaskManager.Abort();
                 return false;
@@ -238,6 +283,7 @@ namespace YABOT.Features.Actions
             SaveConfig(Config);
             teleportHook?.Disable();
             teleportWithTicketsHook?.Disable();
+            aethernetTeleportHook?.Disable();
             Svc.Condition.ConditionChange -= RunFeature;
             Svc.AddonLifecycle.UnregisterListener(OnSelectYesnoSetup);
             base.Disable();
@@ -288,6 +334,7 @@ namespace YABOT.Features.Actions
                 if (ImGui.Checkbox("Auto-confirm Return dialog in The Occult Crescent", ref Config.AutoConfirmReturnInOccultCrescent)) haschanged = true;
                 ImGui.Unindent();
             }
+            if (ImGui.Checkbox("Auto-mount after aetheryte teleport in The Occult Crescent", ref Config.AutoMountAfterAetheryteInOccultCrescent)) haschanged = true;
             if (ImGui.Checkbox("Jump after mounting", ref Config.JumpAfterMount)) haschanged = true;
 
         };
