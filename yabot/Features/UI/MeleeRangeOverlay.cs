@@ -15,10 +15,10 @@ public unsafe class MeleeRangeOverlay : BaseFeature
     public override string Name => "Melee Range Overlay";
 
     public override string Description =>
-        "Shows a small coloured circle on screen indicating whether your current target is within melee weapon-skill range. " +
-        "Uses the game's own in-range/LoS check (Standard Attack, action 7) so the range matches your equipped weapon. " +
+        "Shows a small coloured circle on screen indicating whether your current target is within melee weapon-skill range, in line of sight, and being faced. " +
+        "Uses the game's own check (Standard Attack, action 7) so the range matches your equipped weapon. " +
         "Only displays on melee jobs (tanks and melee DPS - ClassJob role 1 or 2); hidden on ranged DPS and healers. " +
-        "Green when in range, red when out of range or out of line of sight. Hold Shift and drag to reposition.";
+        "Green when in range, line of sight, and facing the target; red otherwise. Hold Shift and drag to reposition.";
 
     public override FeatureType FeatureType => FeatureType.UI;
 
