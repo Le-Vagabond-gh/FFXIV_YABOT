@@ -35,12 +35,15 @@ namespace YABOT.Features.OccultCrescent
         {
             if (ZoneHelper.IsOccultCrescent(territoryId))
             {
+                var freshEntry = !wasInOccultCrescent;
                 wasInOccultCrescent = true;
                 targetGearsetId = -1;
                 TaskManager.Enqueue(() => !Svc.Condition[ConditionFlag.BetweenAreas] && !Svc.Condition[ConditionFlag.BetweenAreas51]);
                 TaskManager.Enqueue(() => Svc.Objects.LocalPlayer != null);
                 TaskManager.Enqueue(() => PlayerState.Instance() != null && PlayerState.Instance()->IsLoaded);
-                TaskManager.Enqueue(SaveAndFindTargetGearset);
+                if (freshEntry)
+                    TaskManager.Enqueue(SavePreviousGearset);
+                TaskManager.Enqueue(FindTargetGearset);
                 TaskManager.Enqueue(TrySwitchGearset);
             }
             else if (wasInOccultCrescent)
@@ -53,14 +56,18 @@ namespace YABOT.Features.OccultCrescent
             }
         }
 
-        private bool SaveAndFindTargetGearset()
+        private bool SavePreviousGearset()
+        {
+            previousGearsetId = RaptureGearsetModule.Instance()->CurrentGearsetIndex;
+            return true;
+        }
+
+        private bool FindTargetGearset()
         {
             var player = Svc.Objects.LocalPlayer;
             if (player == null) return false;
 
             var gearsetModule = RaptureGearsetModule.Instance();
-            previousGearsetId = gearsetModule->CurrentGearsetIndex;
-
             for (var i = 0; i < 100; i++)
             {
                 var gearset = gearsetModule->GetGearset(i);
@@ -78,7 +85,6 @@ namespace YABOT.Features.OccultCrescent
             }
 
             targetGearsetId = -1;
-            previousGearsetId = -1;
             return true;
         }
 
