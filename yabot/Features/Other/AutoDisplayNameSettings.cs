@@ -11,7 +11,7 @@ namespace YABOT.Features.Other
     {
         public override string Name => "Auto Display Name Settings";
 
-        public override string Description => "Automatically changes the display name setting for other PCs based on whether you are in a city, in a duty, or outside.";
+        public override string Description => "Automatically changes the display name setting for other PCs based on whether you are in a city, in a duty, in a large-scale duty (alliance raids, Eureka, Bozja, Occult Crescent), or outside.";
 
         public override FeatureType FeatureType => FeatureType.Other;
 
@@ -30,6 +30,7 @@ namespace YABOT.Features.Other
             public DisplayNameType InCities = DisplayNameType.Always;
             public DisplayNameType OutsideCities = DisplayNameType.Always;
             public DisplayNameType InDuty = DisplayNameType.Always;
+            public DisplayNameType InLargeScaleDuty = DisplayNameType.Always;
         }
 
         public Configs Config { get; set; } = null!;
@@ -64,6 +65,15 @@ namespace YABOT.Features.Other
                 hasChanged = true;
                 ApplyForCurrentZone();
             }
+
+            var inLargeScale = (int)Config.InLargeScaleDuty;
+            ImGui.SetNextItemWidth(200 * ImGui.GetIO().FontGlobalScale);
+            if (ImGui.Combo("In Large-Scale Duty (Alliance Raids, Eureka, Bozja, Occult Crescent)", ref inLargeScale, DisplayNameLabels, DisplayNameLabels.Length))
+            {
+                Config.InLargeScaleDuty = (DisplayNameType)inLargeScale;
+                hasChanged = true;
+                ApplyForCurrentZone();
+            }
         };
 
         public override void Enable()
@@ -84,9 +94,15 @@ namespace YABOT.Features.Other
             try
             {
                 DisplayNameType desired;
-                if (Player.IsInDuty)
+                var intendedUse = Player.TerritoryIntendedUseEnum;
+                if (intendedUse == TerritoryIntendedUseEnum.Alliance_Raid
+                    || intendedUse == TerritoryIntendedUseEnum.Eureka
+                    || intendedUse == TerritoryIntendedUseEnum.Bozja
+                    || intendedUse == TerritoryIntendedUseEnum.Occult_Crescent)
+                    desired = Config.InLargeScaleDuty;
+                else if (Player.IsInDuty)
                     desired = Config.InDuty;
-                else if (Player.TerritoryIntendedUseEnum == TerritoryIntendedUseEnum.City_Area)
+                else if (intendedUse == TerritoryIntendedUseEnum.City_Area)
                     desired = Config.InCities;
                 else
                     desired = Config.OutsideCities;
