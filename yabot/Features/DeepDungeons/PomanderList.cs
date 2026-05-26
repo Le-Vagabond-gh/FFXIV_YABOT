@@ -42,6 +42,8 @@ namespace YABOT.Features.DeepDungeons
 
         public Configs Config { get; private set; } = null!;
         private Overlays Overlay = null!;
+        private Vector2 _lastWindowSize = Vector2.Zero;
+        private float _rightEdgeAnchor = -1f;
 
         public override void Enable()
         {
@@ -81,11 +83,27 @@ namespace YABOT.Features.DeepDungeons
                 if (!Svc.Data.GetExcelSheet<DeepDungeon>().TryGetRow((uint)dd->DeepDungeonId, out var ddRow))
                     return;
 
-                ImGuiHelpers.ForceNextWindowMainViewport();
-                if (Config.WindowPos.X >= 0 && Config.WindowPos.Y >= 0)
-                    ImGui.SetNextWindowPos(Config.WindowPos, ImGuiCond.Once);
-
                 var shiftHeld = ImGui.IsKeyDown(ImGuiKey.LeftShift) || ImGui.IsKeyDown(ImGuiKey.RightShift);
+
+                // Drop a stale right-edge anchor when right-align is off so toggling it back
+                // on re-initializes from the current position rather than reusing the old one.
+                if (!Config.RightAlign)
+                    _rightEdgeAnchor = -1f;
+
+                ImGuiHelpers.ForceNextWindowMainViewport();
+                if (Config.RightAlign && !shiftHeld && _rightEdgeAnchor > 0 && _lastWindowSize.X > 0)
+                {
+                    // Pin the right edge each frame so AlwaysAutoResize grows the window to
+                    // the LEFT as content widens, rather than off the right of the screen.
+                    // Last frame's width is the prediction - exact when content is stable,
+                    // self-correcting within one frame when it changes.
+                    var newX = _rightEdgeAnchor - _lastWindowSize.X;
+                    ImGui.SetNextWindowPos(new Vector2(newX, Config.WindowPos.Y), ImGuiCond.Always);
+                }
+                else if (Config.WindowPos.X >= 0 && Config.WindowPos.Y >= 0)
+                {
+                    ImGui.SetNextWindowPos(Config.WindowPos, ImGuiCond.Once);
+                }
 
                 // When the user has disabled the backdrop, force it transparent unless they're
                 // dragging the window - the dimmed glass while shift is held still gives them a
@@ -112,7 +130,15 @@ namespace YABOT.Features.DeepDungeons
 
                 ImGui.SetWindowFontScale(1f);
 
-                Config.WindowPos = ImGui.GetWindowPos();
+                var winPos = ImGui.GetWindowPos();
+                _lastWindowSize = ImGui.GetWindowSize();
+
+                // Capture the right edge on the first right-align frame, and re-capture while
+                // shift-dragging so the new dragged position becomes the anchor on release.
+                if (Config.RightAlign && (_rightEdgeAnchor < 0 || shiftHeld))
+                    _rightEdgeAnchor = winPos.X + _lastWindowSize.X;
+
+                Config.WindowPos = winPos;
                 ImGui.End();
 
                 ImGui.PopStyleVar(2);
