@@ -9,6 +9,7 @@ namespace YABOT.FeaturesSetup
         Targets,
         UI,
         OccultCrescent,
+        DeepDungeons,
         PluginMods,
     }
 }

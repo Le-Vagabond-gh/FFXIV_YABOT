@@ -32,6 +32,7 @@ internal class MainWindow : Window
         ("Targets", FeatureType.Targets),
         ("UI", FeatureType.UI),
         ("Occult Crescent", FeatureType.OccultCrescent),
+        ("Deep Dungeons", FeatureType.DeepDungeons),
         ("Plugin Mods", FeatureType.PluginMods),
     };
 

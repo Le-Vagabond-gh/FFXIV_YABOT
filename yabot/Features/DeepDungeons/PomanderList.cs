@@ -1,0 +1,421 @@
+using Dalamud.Bindings.ImGui;
+using Dalamud.Interface.Utility;
+using ECommons.DalamudServices;
+using ECommons.ImGuiMethods;
+using FFXIVClientStructs.FFXIV.Client.Game.Event;
+using FFXIVClientStructs.FFXIV.Client.Game.InstanceContent;
+using Lumina.Excel.Sheets;
+using YABOT.FeaturesSetup;
+using YABOT.UI;
+using System;
+using System.Collections.Generic;
+using System.Numerics;
+
+namespace YABOT.Features.DeepDungeons
+{
+    public unsafe class PomanderList : BaseFeature
+    {
+        public override string Name => "Pomander List";
+
+        public override string Description =>
+            "While inside a deep dungeon (Palace of the Dead, Heaven-on-High, Eureka Orthos), shows a clickable overlay listing the pomanders and magicite/demiclones you currently hold. Each row shows the icon, name, a short effect summary, and the quantity. Click a row to use that pomander/stone. Hold Shift to drag the window to reposition it.";
+
+        public override FeatureType FeatureType => FeatureType.DeepDungeons;
+        public override bool UseAutoConfig => true;
+
+        public class Configs : FeatureConfig
+        {
+            public Vector2 WindowPos = new(-1, -1);
+
+            [FeatureConfigOption("Window scale", FloatMin = 0.5f, FloatMax = 3f, EditorSize = 200, Format = "%.2fx")]
+            public float WindowScale = 1f;
+
+            [FeatureConfigOption("Show background")]
+            public bool ShowBackground = true;
+
+            [FeatureConfigOption("Right-align (icon on the right)")]
+            public bool RightAlign = false;
+
+            [FeatureConfigOption("Hide name (show on hover)")]
+            public bool HideName = false;
+        }
+
+        public Configs Config { get; private set; } = null!;
+        private Overlays Overlay = null!;
+
+        public override void Enable()
+        {
+            Config = LoadConfig<Configs>() ?? new Configs();
+            Overlay = new(this);
+            base.Enable();
+        }
+
+        public override void Disable()
+        {
+            SaveConfig(Config);
+            if (Overlay != null)
+            {
+                P.Ws.RemoveWindow(Overlay);
+                Overlay = null!;
+            }
+            base.Disable();
+        }
+
+        public override bool DrawConditions()
+        {
+            try
+            {
+                var ef = EventFramework.Instance();
+                if (ef == null) return false;
+                return ef->GetInstanceContentDeepDungeon() != null;
+            }
+            catch { return false; }
+        }
+
+        public override void Draw()
+        {
+            try
+            {
+                var dd = EventFramework.Instance()->GetInstanceContentDeepDungeon();
+                if (dd == null) return;
+                if (!Svc.Data.GetExcelSheet<DeepDungeon>().TryGetRow((uint)dd->DeepDungeonId, out var ddRow))
+                    return;
+
+                ImGuiHelpers.ForceNextWindowMainViewport();
+                if (Config.WindowPos.X >= 0 && Config.WindowPos.Y >= 0)
+                    ImGui.SetNextWindowPos(Config.WindowPos, ImGuiCond.Once);
+
+                var shiftHeld = ImGui.IsKeyDown(ImGuiKey.LeftShift) || ImGui.IsKeyDown(ImGuiKey.RightShift);
+
+                // When the user has disabled the backdrop, force it transparent unless they're
+                // dragging the window - the dimmed glass while shift is held still gives them a
+                // visual handle to grab.
+                var bgAlpha = Config.ShowBackground
+                    ? (shiftHeld ? 0.7f : 0.55f)
+                    : (shiftHeld ? 0.35f : 0f);
+                ImGui.PushStyleColor(ImGuiCol.WindowBg, new Vector4(0, 0, 0, bgAlpha));
+                ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(8, 6));
+                ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 0f);
+
+                var flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize
+                    | ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoSavedSettings
+                    | ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoNav;
+                if (!shiftHeld)
+                    flags |= ImGuiWindowFlags.NoMove;
+
+                ImGui.Begin("###YABOTPomanderList", flags);
+
+                ImGui.SetWindowFontScale(Math.Clamp(Config.WindowScale, 0.5f, 3f));
+
+                DrawPomanderRows(dd, ddRow);
+                DrawMagiciteRows(dd, ddRow);
+
+                ImGui.SetWindowFontScale(1f);
+
+                Config.WindowPos = ImGui.GetWindowPos();
+                ImGui.End();
+
+                ImGui.PopStyleVar(2);
+                ImGui.PopStyleColor();
+            }
+            catch (Exception ex)
+            {
+                Svc.Log.Error(ex, $"[{Name}] Draw failed");
+            }
+        }
+
+        private void DrawPomanderRows(InstanceContentDeepDungeon* dd, DeepDungeon ddRow)
+        {
+            var pomanderSheet = Svc.Data.GetExcelSheet<DeepDungeonItem>();
+            var any = false;
+
+            for (var slot = 0; slot < 16; slot++)
+            {
+                var info = dd->Items[slot];
+                if (info.Count == 0) continue;
+
+                var slotRef = ddRow.PomanderSlot[slot];
+                if (slotRef.RowId == 0) continue;
+                if (!pomanderSheet.TryGetRow(slotRef.RowId, out var pomander)) continue;
+
+                var name = pomander.Name.ToString();
+                if (string.IsNullOrEmpty(name)) continue;
+
+                var slotCapture = (uint)slot;
+                DrawRow(
+                    pomander.Icon,
+                    StripPomanderPrefix(name),
+                    LookupDescription(name, PomanderDescriptions),
+                    info.Count,
+                    showCount: true,
+                    info.IsActive,
+                    () => dd->UsePomander(slotCapture));
+                any = true;
+            }
+
+            if (!any)
+                ImGui.TextDisabled("No pomanders");
+        }
+
+        private void DrawMagiciteRows(InstanceContentDeepDungeon* dd, DeepDungeon ddRow)
+        {
+            // DeepDungeonType switches MagiciteSlot's link target: 1 = DeepDungeonMagicStone
+            // (PotD/HoH magicite), 2 = DeepDungeonDemiclone (Eureka Orthos demiclones).
+            // Pilgrim's Traverse (added in 7.4) introduces Juniper Incenses with an unknown
+            // type value not covered by the current schema, so for anything outside 1/2 we
+            // probe both known sheets and use whichever has the row. The UseStone call works
+            // regardless because the engine indexes by slot, not by sheet identity.
+            var stoneSheet = Svc.Data.GetExcelSheet<DeepDungeonMagicStone>();
+            var demicloneSheet = Svc.Data.GetExcelSheet<DeepDungeonDemiclone>();
+            var type = ddRow.DeepDungeonType;
+
+            // The 3-byte _magicite array is NOT (count-per-MagiciteSlot-index). Each byte is the
+            // 1-based MagiciteSlot index of the magicite occupying that inventory slot, or 0 if
+            // empty. So _magicite[0] = 3 means inventory slot 0 currently holds the type at
+            // MagiciteSlot[2] (e.g. Vortex in HoH), with an implicit count of 1 - you can hold
+            // at most three different magicite, one per inventory slot. UseStone takes the
+            // inventory slot (0-2), not the MagiciteSlot index.
+            //
+            // Collect first so we can skip the spacing + section when empty - a "No magicite"
+            // line is just noise once you've already cleared the floor.
+            var rows = new List<(uint Icon, string Name, byte Count, uint Slot)>();
+            for (var inventorySlot = 0; inventorySlot < 3; inventorySlot++)
+            {
+                var typeByte = dd->Magicite[inventorySlot];
+                if (typeByte == 0) continue;
+
+                var sheetIndex = typeByte - 1;
+                if (sheetIndex >= 4) continue;
+
+                var slotRef = ddRow.MagiciteSlot[sheetIndex];
+                if (slotRef.RowId == 0) continue;
+
+                var (icon, name) = ResolveStoneSlot(type, slotRef.RowId, stoneSheet, demicloneSheet);
+                if (string.IsNullOrEmpty(name)) continue;
+
+                rows.Add((icon, name, (byte)1, (uint)inventorySlot));
+            }
+
+            if (rows.Count == 0) return;
+
+            ImGui.Spacing();
+            foreach (var row in rows)
+            {
+                var slotCapture = row.Slot;
+                DrawRow(
+                    row.Icon,
+                    row.Name,
+                    LookupDescription(row.Name, MagiciteDescriptions),
+                    row.Count,
+                    showCount: false,
+                    isActive: false,
+                    () => dd->UseStone(slotCapture));
+            }
+        }
+
+        private static (uint Icon, string Name) ResolveStoneSlot(
+            byte deepDungeonType,
+            uint rowId,
+            Lumina.Excel.ExcelSheet<DeepDungeonMagicStone> stoneSheet,
+            Lumina.Excel.ExcelSheet<DeepDungeonDemiclone> demicloneSheet)
+        {
+            if (deepDungeonType == 1 && stoneSheet.TryGetRow(rowId, out var stone) && stone.Icon != 0)
+                return (stone.Icon, stone.Name.ToString());
+            if (deepDungeonType == 2 && demicloneSheet.TryGetRow(rowId, out var demi) && demi.Icon != 0)
+                return (demi.Icon, demi.TitleCase.ToString());
+
+            if (stoneSheet.TryGetRow(rowId, out stone) && stone.Icon != 0)
+                return (stone.Icon, stone.Name.ToString());
+            if (demicloneSheet.TryGetRow(rowId, out demi) && demi.Icon != 0)
+                return (demi.Icon, demi.TitleCase.ToString());
+
+            return (0, string.Empty);
+        }
+
+        private void DrawRow(uint iconId, string name, string desc, byte count, bool showCount, bool isActive, System.Action onClick)
+        {
+            // GetFontSize reflects the SetWindowFontScale already pushed in Draw, so icons
+            // track the configured scale via font size alone.
+            var iconSize = ImGui.GetFontSize() * 1.6f;
+            var qty = showCount ? $"   x{count}" : string.Empty;
+            var label = Config.HideName
+                ? (string.IsNullOrEmpty(desc) ? qty.TrimStart() : $"{desc}{qty}")
+                : (string.IsNullOrEmpty(desc) ? $"{name}{qty}" : $"{name} - {desc}{qty}");
+            // The selectable's hover label needs to be unique per row so isActive coloring
+            // and clicks don't collide between rows that share text.
+            var hiddenId = $"###{name}_row";
+
+            ImGui.PushID(name);
+
+            if (Config.RightAlign)
+                DrawRowRightAligned(iconId, iconSize, label, hiddenId, isActive, onClick);
+            else
+                DrawRowLeftAligned(iconId, iconSize, label, hiddenId, isActive, onClick);
+
+            // Tooltip surfaces the canonical name when it's hidden, and the active-on-floor
+            // marker either way. Combined into one tooltip so they don't fight for the hover.
+            if (ImGui.IsItemHovered())
+            {
+                var tooltip = Config.HideName
+                    ? (isActive ? $"{name}\n(currently active on this floor)" : name)
+                    : (isActive ? "Currently active on this floor" : null);
+                if (tooltip != null)
+                    ImGui.SetTooltip(tooltip);
+            }
+
+            ImGui.PopID();
+        }
+
+        private void DrawRowLeftAligned(uint iconId, float iconSize, string label, string id, bool isActive, System.Action onClick)
+        {
+            DrawIcon(iconId, iconSize);
+            ImGui.SameLine();
+
+            var textOffsetY = (iconSize - ImGui.GetTextLineHeight()) * 0.5f;
+            if (textOffsetY > 0)
+                ImGui.SetCursorPosY(ImGui.GetCursorPosY() + textOffsetY);
+
+            DrawSelectable(label + id, 0f, iconSize, isActive, onClick);
+        }
+
+        private void DrawRowRightAligned(uint iconId, float iconSize, string label, string id, bool isActive, System.Action onClick)
+        {
+            // Push the row to the right edge of the auto-resized window. ContentRegionAvail is
+            // the widest row's width (set by previous frames in AlwaysAutoResize windows), so
+            // shorter rows still settle next to the right edge across frames.
+            var gap = ImGui.GetStyle().ItemSpacing.X;
+            var labelWidth = ImGui.CalcTextSize(label).X + ImGui.GetStyle().FramePadding.X * 2f;
+            var totalWidth = labelWidth + gap + iconSize;
+            var avail = ImGui.GetContentRegionAvail().X;
+            if (avail > totalWidth)
+                ImGui.SetCursorPosX(ImGui.GetCursorPosX() + avail - totalWidth);
+
+            var startY = ImGui.GetCursorPosY();
+            var textOffsetY = (iconSize - ImGui.GetTextLineHeight()) * 0.5f;
+            if (textOffsetY > 0)
+                ImGui.SetCursorPosY(startY + textOffsetY);
+
+            DrawSelectable(label + id, labelWidth, iconSize, isActive, onClick);
+
+            ImGui.SameLine();
+            ImGui.SetCursorPosY(startY);
+            DrawIcon(iconId, iconSize);
+        }
+
+        private static void DrawIcon(uint iconId, float iconSize)
+        {
+            if (iconId != 0 && ThreadLoadImageHandler.TryGetIconTextureWrap(iconId, false, out var tex) && tex != null)
+                ImGui.Image(tex.Handle, new Vector2(iconSize, iconSize));
+            else
+                ImGui.Dummy(new Vector2(iconSize, iconSize));
+        }
+
+        private void DrawSelectable(string label, float width, float height, bool isActive, System.Action onClick)
+        {
+            if (isActive)
+                ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(0.55f, 1f, 0.55f, 1f));
+
+            if (ImGui.Selectable(label, false, ImGuiSelectableFlags.None, new Vector2(width, height)))
+            {
+                try { onClick(); }
+                catch (Exception ex) { Svc.Log.Error(ex, $"[{Name}] use failed"); }
+            }
+
+            if (isActive)
+                ImGui.PopStyleColor();
+        }
+
+        // Effect summaries are two-word blurbs keyed off the canonical pomander/magicite name.
+        // The names live in the DeepDungeonItem / DeepDungeonMagicStone / DeepDungeonDemiclone
+        // sheets; we look up the trailing distinguishing word (after "of " for pomanders, the
+        // leading word for magicite/demiclones) to keep matching stable across language clients
+        // as long as the English sheet is loaded.
+
+        // Effects per consolegameswiki Palace of the Dead / Heaven-on-High / Eureka Orthos /
+        // Pilgrim's Traverse pages. Keys are the distinguishing word from each item's name
+        // ("Pomander of X", "Protomander of X" -> X). DeepDungeonItem rows are shared across
+        // dungeons (only the per-dungeon slot mapping differs), so one dictionary covers them
+        // all - dungeon-exclusive entries simply never resolve in other dungeons.
+        private static readonly Dictionary<string, string> PomanderDescriptions = new(StringComparer.OrdinalIgnoreCase)
+        {
+            // Shared across all deep dungeons
+            { "Safety", "remove traps" },
+            { "Sight", "reveal map" },
+            { "Strength", "+30% 8min" },
+            { "Steel", "-40% 8min" },
+            { "Affluence", "more coffers f+1" },
+            { "Flight", "fewer enemies f+1" },
+            { "Alteration", "mimic spawn f+1" },
+            { "Purity", "remove pox" },
+            { "Fortune", "drop boost" },
+            { "Witching", "polymorph 30s" },
+            { "Serenity", "remove enchantments" },
+            { "Intuition", "reveal treasure" },
+            { "Raising", "auto raise" },
+            // Palace of the Dead exclusives
+            { "Rage", "manticore form" },
+            { "Lust", "succubus form" },
+            { "Resolution", "kuribu form" },
+            // Heaven-on-High exclusives
+            { "Frailty", "weaken 3min" },
+            { "Concealment", "party stealth" },
+            { "Petrification", "stone 30s" },
+            // Eureka Orthos protomander exclusives
+            { "Lethargy", "slow 10min" },
+            { "Storms", "drain HP" },
+            { "Dread", "dreadnaught form" },
+            // Pilgrim's Traverse exclusives
+            { "Haste", "swift actions" },
+            { "Purification", "cleanse barrier" },
+            { "Devotion", "guarantee votive f+1" },
+        };
+
+        // Combined dictionary for stones, demiclones, and juniper incenses - they all
+        // share the same _magicite slots + UseStone path, so one lookup table is fine.
+        // Keys are the leading word of each item's name.
+        private static readonly Dictionary<string, string> MagiciteDescriptions = new(StringComparer.OrdinalIgnoreCase)
+        {
+            // Heaven-on-High magicite (summon a primal simulacrum)
+            { "Inferno", "summon ifrit" },
+            { "Crag", "summon titan" },
+            { "Vortex", "summon garuda" },
+            { "Elder", "summon odin" },
+            // Eureka Orthos demiclones
+            { "Unei", "healer summon" },
+            { "Doga", "damage summon" },
+            { "Onion", "balanced summon" },
+            // Pilgrim's Traverse juniper incenses
+            { "Mazeroot", "faerie utility" },
+            { "Barkbalm", "double HP" },
+            { "Poisonfruit", "invuln nuke" },
+        };
+
+        private static string StripPomanderPrefix(string name)
+        {
+            var ofIdx = name.IndexOf(" of ", StringComparison.OrdinalIgnoreCase);
+            return ofIdx >= 0 ? name.Substring(ofIdx + 4).Trim() : name;
+        }
+
+        private static string LookupDescription(string name, Dictionary<string, string> map)
+        {
+            // Pomanders read "Pomander of X" -> key on "X". Magicite/demiclones read "X Magicite"
+            // or "X Demiclone" -> key on the leading word. We probe both shapes against the table
+            // and fall back to empty when we don't have a curated blurb.
+            var ofIdx = name.IndexOf(" of ", StringComparison.OrdinalIgnoreCase);
+            if (ofIdx >= 0)
+            {
+                var key = name.Substring(ofIdx + 4).Trim();
+                if (map.TryGetValue(key, out var desc)) return desc;
+            }
+
+            var spaceIdx = name.IndexOf(' ');
+            if (spaceIdx > 0)
+            {
+                var key = name.Substring(0, spaceIdx).Trim();
+                if (map.TryGetValue(key, out var desc)) return desc;
+            }
+
+            return string.Empty;
+        }
+    }
+}
