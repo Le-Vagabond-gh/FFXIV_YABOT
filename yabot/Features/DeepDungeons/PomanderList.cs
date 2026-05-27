@@ -25,7 +25,11 @@ namespace YABOT.Features.DeepDungeons
 
         public class Configs : FeatureConfig
         {
+            // Remembered top-left, used to place the window when left-aligned.
             public Vector2 WindowPos = new(-1, -1);
+
+            // Remembered top-right, used to place the window when right-aligned.
+            public Vector2 WindowPosRight = new(-1, -1);
 
             [FeatureConfigOption("Window scale", FloatMin = 0.5f, FloatMax = 3f, EditorSize = 200, Format = "%.2fx")]
             public float WindowScale = 1f;
@@ -43,11 +47,13 @@ namespace YABOT.Features.DeepDungeons
         public Configs Config { get; private set; } = null!;
         private Overlays Overlay = null!;
         private Vector2 _lastWindowSize = Vector2.Zero;
-        private float _rightEdgeAnchor = -1f;
+        private int _lastDrawFrame = -10;
+        private bool _prevRightAlign;
 
         public override void Enable()
         {
             Config = LoadConfig<Configs>() ?? new Configs();
+            _prevRightAlign = Config.RightAlign;
             Overlay = new(this);
             base.Enable();
         }
@@ -85,24 +91,35 @@ namespace YABOT.Features.DeepDungeons
 
                 var shiftHeld = ImGui.IsKeyDown(ImGuiKey.LeftShift) || ImGui.IsKeyDown(ImGuiKey.RightShift);
 
-                // Drop a stale right-edge anchor when right-align is off so toggling it back
-                // on re-initializes from the current position rather than reusing the old one.
-                if (!Config.RightAlign)
-                    _rightEdgeAnchor = -1f;
+                // The overlay only draws inside a deep dungeon, so leaving and re-entering
+                // leaves a gap in the ImGui frame count. Detect it to force the saved position
+                // back on the re-appearing frame instead of trusting whatever ImGui last had.
+                var frame = ImGui.GetFrameCount();
+                var reappearing = frame - _lastDrawFrame > 1;
+
+                // Toggling alignment re-anchors to the window's current spot so it doesn't jump
+                // to a stale remembered corner; the corner is recaptured after this frame draws.
+                if (Config.RightAlign != _prevRightAlign)
+                {
+                    if (Config.RightAlign)
+                        Config.WindowPosRight = new Vector2(-1, -1);
+                    _prevRightAlign = Config.RightAlign;
+                }
 
                 ImGuiHelpers.ForceNextWindowMainViewport();
-                if (Config.RightAlign && !shiftHeld && _rightEdgeAnchor > 0 && _lastWindowSize.X > 0)
+                if (Config.RightAlign && !shiftHeld && Config.WindowPosRight.X >= 0 && Config.WindowPosRight.Y >= 0 && _lastWindowSize.X > 0)
                 {
-                    // Pin the right edge each frame so AlwaysAutoResize grows the window to
-                    // the LEFT as content widens, rather than off the right of the screen.
-                    // Last frame's width is the prediction - exact when content is stable,
-                    // self-correcting within one frame when it changes.
-                    var newX = _rightEdgeAnchor - _lastWindowSize.X;
-                    ImGui.SetNextWindowPos(new Vector2(newX, Config.WindowPos.Y), ImGuiCond.Always);
+                    // Pin the remembered top-RIGHT corner: place the top-left at rightX - width
+                    // so AlwaysAutoResize grows the window leftward and the right edge stays put.
+                    // Width is predicted from last frame; it converges within one frame when the
+                    // content (and so the width) changes, including the first frame on re-entry.
+                    ImGui.SetNextWindowPos(new Vector2(Config.WindowPosRight.X - _lastWindowSize.X, Config.WindowPosRight.Y), ImGuiCond.Always);
                 }
                 else if (Config.WindowPos.X >= 0 && Config.WindowPos.Y >= 0)
                 {
-                    ImGui.SetNextWindowPos(Config.WindowPos, ImGuiCond.Once);
+                    // Left-align, or right-align before its corner is captured: place by the
+                    // remembered top-left. Force it on re-appearance so we land where we left off.
+                    ImGui.SetNextWindowPos(Config.WindowPos, reappearing ? ImGuiCond.Always : ImGuiCond.Once);
                 }
 
                 // When the user has disabled the backdrop, force it transparent unless they're
@@ -133,12 +150,15 @@ namespace YABOT.Features.DeepDungeons
                 var winPos = ImGui.GetWindowPos();
                 _lastWindowSize = ImGui.GetWindowSize();
 
-                // Capture the right edge on the first right-align frame, and re-capture while
-                // shift-dragging so the new dragged position becomes the anchor on release.
-                if (Config.RightAlign && (_rightEdgeAnchor < 0 || shiftHeld))
-                    _rightEdgeAnchor = winPos.X + _lastWindowSize.X;
-
+                // Top-left always tracks the live position (drives left-align and a clean
+                // hand-off when toggling modes). The remembered top-right only moves when it's
+                // unset (first frame / after a toggle) or the user shift-drags, so right-align
+                // otherwise keeps the right edge fixed as the content width changes.
                 Config.WindowPos = winPos;
+                if (Config.RightAlign && (Config.WindowPosRight.X < 0 || shiftHeld))
+                    Config.WindowPosRight = new Vector2(winPos.X + _lastWindowSize.X, winPos.Y);
+
+                _lastDrawFrame = frame;
                 ImGui.End();
 
                 ImGui.PopStyleVar(2);
