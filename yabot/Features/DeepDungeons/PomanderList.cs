@@ -18,7 +18,7 @@ namespace YABOT.Features.DeepDungeons
         public override string Name => "Pomander List";
 
         public override string Description =>
-            "While inside a deep dungeon (Palace of the Dead, Heaven-on-High, Eureka Orthos), shows a clickable overlay listing the pomanders and magicite/demiclones you currently hold. Each row shows the icon, name, a short effect summary, and the quantity. Click a row to use that pomander/stone. Hold Shift to drag the window to reposition it.";
+            "While inside a deep dungeon (Palace of the Dead, Heaven-on-High, Eureka Orthos), shows a clickable overlay listing the pomanders and magicite/demiclones you currently hold. Each row shows the icon, name, a short effect summary, and the quantity. Click a row to use that pomander/stone. Optionally shows an estimated mob respawn timer for the current floor. Hold Shift to drag the window to reposition it.";
 
         public override FeatureType FeatureType => FeatureType.DeepDungeons;
         public override bool UseAutoConfig => true;
@@ -42,6 +42,9 @@ namespace YABOT.Features.DeepDungeons
 
             [FeatureConfigOption("Hide name (show on hover)")]
             public bool HideName = false;
+
+            [FeatureConfigOption("Show respawn timer")]
+            public bool ShowRespawnTimer = true;
         }
 
         public Configs Config { get; private set; } = null!;
@@ -49,6 +52,11 @@ namespace YABOT.Features.DeepDungeons
         private Vector2 _lastWindowSize = Vector2.Zero;
         private int _lastDrawFrame = -10;
         private bool _prevRightAlign;
+
+        // Respawn timer is dead-reckoned (the game exposes no countdown): we anchor to the time
+        // the player entered the current floor, detected by watching dd->Floor change.
+        private byte _lastFloor;
+        private DateTime _floorEnterTime;
 
         public override void Enable()
         {
@@ -142,6 +150,8 @@ namespace YABOT.Features.DeepDungeons
 
                 ImGui.SetWindowFontScale(Math.Clamp(Config.WindowScale, 0.5f, 3f));
 
+                UpdateFloorTracking(dd);
+                DrawRespawnTimer(dd);
                 DrawPomanderRows(dd, ddRow);
                 DrawMagiciteRows(dd, ddRow);
 
@@ -168,6 +178,48 @@ namespace YABOT.Features.DeepDungeons
             {
                 Svc.Log.Error(ex, $"[{Name}] Draw failed");
             }
+        }
+
+        private void UpdateFloorTracking(InstanceContentDeepDungeon* dd)
+        {
+            // Re-anchor the respawn clock whenever the floor changes. The DD instance survives
+            // floor-to-floor transitions, so dd->Floor updating is a reliable "new floor" signal.
+            // (Enabling the overlay mid-floor anchors to that moment, so the first cycle can read
+            // early - same inherent caveat as NecroLens.)
+            if (dd->Floor != _lastFloor)
+            {
+                _lastFloor = dd->Floor;
+                _floorEnterTime = DateTime.Now;
+            }
+        }
+
+        private void DrawRespawnTimer(InstanceContentDeepDungeon* dd)
+        {
+            if (!Config.ShowRespawnTimer) return;
+            if (!DeepDungeonRespawn.TryGetInterval(dd->DeepDungeonId, dd->Floor, out var interval)) return;
+
+            // Cycle the countdown by advancing through whole intervals since floor entry.
+            var elapsed = (DateTime.Now - _floorEnterTime).TotalSeconds;
+            var remaining = interval - elapsed % interval;
+            var label = $"Respawn  {TimeSpan.FromSeconds(remaining):mm\\:ss}";
+
+            // Tint amber in the final few seconds so an imminent wave is easy to catch at a glance.
+            if (remaining <= 5)
+                ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(1f, 0.78f, 0.25f, 1f));
+
+            if (Config.RightAlign)
+            {
+                var avail = ImGui.GetContentRegionAvail().X;
+                var width = ImGui.CalcTextSize(label).X;
+                if (avail > width)
+                    ImGui.SetCursorPosX(ImGui.GetCursorPosX() + avail - width);
+            }
+            ImGui.TextUnformatted(label);
+
+            if (remaining <= 5)
+                ImGui.PopStyleColor();
+
+            ImGui.Spacing();
         }
 
         private void DrawPomanderRows(InstanceContentDeepDungeon* dd, DeepDungeon ddRow)
