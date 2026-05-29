@@ -45,6 +45,9 @@ namespace YABOT.Features.DeepDungeons
 
             [FeatureConfigOption("Show respawn timer")]
             public bool ShowRespawnTimer = true;
+
+            [FeatureConfigOption("Lock panel (disable Shift to move)")]
+            public bool LockPanel = false;
         }
 
         public Configs Config { get; private set; } = null!;
@@ -57,6 +60,19 @@ namespace YABOT.Features.DeepDungeons
         // the player entered the current floor, detected by watching dd->Floor change.
         private byte _lastFloor;
         private DateTime _floorEnterTime;
+
+        // Flash a row's text blue<->white briefly when its count goes up, so a freshly acquired
+        // pomander/magicite is easy to spot. Counts are tracked per slot (so a 0->1 pickup is
+        // caught); the flash is keyed by the same name DrawRow draws under. Tracking is "primed"
+        // without flashing on the first draw and on dungeon re-entry so existing stock stays dark.
+        private readonly byte[] _prevPomanderCounts = new byte[16];
+        private readonly byte[] _prevMagiciteSlots = new byte[3];
+        private bool _trackingPrimed;
+        private readonly Dictionary<string, DateTime> _flashStart = new(StringComparer.Ordinal);
+        private static readonly Vector4 FlashBlue = new(0.35f, 0.6f, 1f, 1f);
+        private static readonly Vector4 FlashWhite = new(1f, 1f, 1f, 1f);
+        private static readonly Vector4 ActiveGreen = new(0.55f, 1f, 0.55f, 1f);
+        private const double FlashDuration = 1.5;
 
         public override void Enable()
         {
@@ -97,13 +113,24 @@ namespace YABOT.Features.DeepDungeons
                 if (!Svc.Data.GetExcelSheet<DeepDungeon>().TryGetRow((uint)dd->DeepDungeonId, out var ddRow))
                     return;
 
-                var shiftHeld = ImGui.IsKeyDown(ImGuiKey.LeftShift) || ImGui.IsKeyDown(ImGuiKey.RightShift);
+                // When locked, ignore Shift entirely so the window can't be dragged or re-anchored.
+                var shiftHeld = !Config.LockPanel
+                    && (ImGui.IsKeyDown(ImGuiKey.LeftShift) || ImGui.IsKeyDown(ImGuiKey.RightShift));
 
                 // The overlay only draws inside a deep dungeon, so leaving and re-entering
                 // leaves a gap in the ImGui frame count. Detect it to force the saved position
                 // back on the re-appearing frame instead of trusting whatever ImGui last had.
                 var frame = ImGui.GetFrameCount();
                 var reappearing = frame - _lastDrawFrame > 1;
+
+                // On the first draw and on re-entry, record current counts as the baseline without
+                // flashing - otherwise everything we already hold would light up on appearance.
+                if (reappearing)
+                {
+                    _trackingPrimed = false;
+                    _flashStart.Clear();
+                }
+                var prime = !_trackingPrimed;
 
                 // Toggling alignment re-anchors to the window's current spot so it doesn't jump
                 // to a stale remembered corner; the corner is recaptured after this frame draws.
@@ -152,8 +179,9 @@ namespace YABOT.Features.DeepDungeons
 
                 UpdateFloorTracking(dd);
                 DrawRespawnTimer(dd);
-                DrawPomanderRows(dd, ddRow);
-                DrawMagiciteRows(dd, ddRow);
+                DrawPomanderRows(dd, ddRow, prime);
+                DrawMagiciteRows(dd, ddRow, prime);
+                _trackingPrimed = true;
 
                 ImGui.SetWindowFontScale(1f);
 
@@ -222,7 +250,7 @@ namespace YABOT.Features.DeepDungeons
             ImGui.Spacing();
         }
 
-        private void DrawPomanderRows(InstanceContentDeepDungeon* dd, DeepDungeon ddRow)
+        private void DrawPomanderRows(InstanceContentDeepDungeon* dd, DeepDungeon ddRow, bool prime)
         {
             var pomanderSheet = Svc.Data.GetExcelSheet<DeepDungeonItem>();
             var any = false;
@@ -230,7 +258,9 @@ namespace YABOT.Features.DeepDungeons
             for (var slot = 0; slot < 16; slot++)
             {
                 var info = dd->Items[slot];
-                if (info.Count == 0) continue;
+
+                var prevCount = _prevPomanderCounts[slot];
+                _prevPomanderCounts[slot] = info.Count;
 
                 var slotRef = ddRow.PomanderSlot[slot];
                 if (slotRef.RowId == 0) continue;
@@ -239,14 +269,29 @@ namespace YABOT.Features.DeepDungeons
                 var name = pomander.Name.ToString();
                 if (string.IsNullOrEmpty(name)) continue;
 
+                var shortName = StripPomanderPrefix(name);
+
+                // Some pomanders grant a normal player buff rather than a floor-wide effect, so the
+                // struct's IsActive flag never lights up for them; detect those by buff name instead.
+                var isActive = PomanderStatusId.TryGetValue(shortName, out var statusId)
+                    ? PlayerHasStatus(statusId)
+                    : info.IsActive;
+
+                // Keep a pomander listed while its effect is active even if the last one was
+                // consumed, so the active marker doesn't vanish the moment the count hits zero.
+                if (info.Count == 0 && !isActive) continue;
+
+                if (!prime && info.Count > prevCount)
+                    _flashStart[shortName] = DateTime.Now;
+
                 var slotCapture = (uint)slot;
                 DrawRow(
                     pomander.Icon,
-                    StripPomanderPrefix(name),
+                    shortName,
                     LookupDescription(name, PomanderDescriptions),
                     info.Count,
-                    showCount: true,
-                    info.IsActive,
+                    showCount: info.Count > 0,
+                    isActive,
                     () => dd->UsePomander(slotCapture));
                 any = true;
             }
@@ -255,7 +300,7 @@ namespace YABOT.Features.DeepDungeons
                 ImGui.TextDisabled("No pomanders");
         }
 
-        private void DrawMagiciteRows(InstanceContentDeepDungeon* dd, DeepDungeon ddRow)
+        private void DrawMagiciteRows(InstanceContentDeepDungeon* dd, DeepDungeon ddRow, bool prime)
         {
             // DeepDungeonType switches MagiciteSlot's link target: 1 = DeepDungeonMagicStone
             // (PotD/HoH magicite), 2 = DeepDungeonDemiclone (Eureka Orthos demiclones).
@@ -280,6 +325,10 @@ namespace YABOT.Features.DeepDungeons
             for (var inventorySlot = 0; inventorySlot < 3; inventorySlot++)
             {
                 var typeByte = dd->Magicite[inventorySlot];
+
+                var prevType = _prevMagiciteSlots[inventorySlot];
+                _prevMagiciteSlots[inventorySlot] = typeByte;
+
                 if (typeByte == 0) continue;
 
                 var sheetIndex = typeByte - 1;
@@ -290,6 +339,10 @@ namespace YABOT.Features.DeepDungeons
 
                 var (icon, name) = ResolveStoneSlot(type, slotRef.RowId, stoneSheet, demicloneSheet);
                 if (string.IsNullOrEmpty(name)) continue;
+
+                // Magicite is one-per-slot, so a slot changing to a new (or any) type is a pickup.
+                if (!prime && typeByte != prevType)
+                    _flashStart[name] = DateTime.Now;
 
                 rows.Add((icon, name, (byte)1, (uint)inventorySlot));
             }
@@ -345,10 +398,12 @@ namespace YABOT.Features.DeepDungeons
 
             ImGui.PushID(name);
 
+            var color = GetRowColor(name, isActive);
+
             if (Config.RightAlign)
-                DrawRowRightAligned(iconId, iconSize, label, hiddenId, isActive, onClick);
+                DrawRowRightAligned(iconId, iconSize, label, hiddenId, color, onClick);
             else
-                DrawRowLeftAligned(iconId, iconSize, label, hiddenId, isActive, onClick);
+                DrawRowLeftAligned(iconId, iconSize, label, hiddenId, color, onClick);
 
             // Tooltip surfaces the canonical name when it's hidden, and the active-on-floor
             // marker either way. Combined into one tooltip so they don't fight for the hover.
@@ -364,7 +419,7 @@ namespace YABOT.Features.DeepDungeons
             ImGui.PopID();
         }
 
-        private void DrawRowLeftAligned(uint iconId, float iconSize, string label, string id, bool isActive, System.Action onClick)
+        private void DrawRowLeftAligned(uint iconId, float iconSize, string label, string id, Vector4? color, System.Action onClick)
         {
             DrawIcon(iconId, iconSize);
             ImGui.SameLine();
@@ -373,10 +428,10 @@ namespace YABOT.Features.DeepDungeons
             if (textOffsetY > 0)
                 ImGui.SetCursorPosY(ImGui.GetCursorPosY() + textOffsetY);
 
-            DrawSelectable(label + id, 0f, iconSize, isActive, onClick);
+            DrawSelectable(label + id, 0f, iconSize, color, onClick);
         }
 
-        private void DrawRowRightAligned(uint iconId, float iconSize, string label, string id, bool isActive, System.Action onClick)
+        private void DrawRowRightAligned(uint iconId, float iconSize, string label, string id, Vector4? color, System.Action onClick)
         {
             // Push the row to the right edge of the auto-resized window. ContentRegionAvail is
             // the widest row's width (set by previous frames in AlwaysAutoResize windows), so
@@ -393,7 +448,7 @@ namespace YABOT.Features.DeepDungeons
             if (textOffsetY > 0)
                 ImGui.SetCursorPosY(startY + textOffsetY);
 
-            DrawSelectable(label + id, labelWidth, iconSize, isActive, onClick);
+            DrawSelectable(label + id, labelWidth, iconSize, color, onClick);
 
             ImGui.SameLine();
             ImGui.SetCursorPosY(startY);
@@ -408,10 +463,10 @@ namespace YABOT.Features.DeepDungeons
                 ImGui.Dummy(new Vector2(iconSize, iconSize));
         }
 
-        private void DrawSelectable(string label, float width, float height, bool isActive, System.Action onClick)
+        private void DrawSelectable(string label, float width, float height, Vector4? color, System.Action onClick)
         {
-            if (isActive)
-                ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(0.55f, 1f, 0.55f, 1f));
+            if (color.HasValue)
+                ImGui.PushStyleColor(ImGuiCol.Text, color.Value);
 
             if (ImGui.Selectable(label, false, ImGuiSelectableFlags.None, new Vector2(width, height)))
             {
@@ -419,8 +474,32 @@ namespace YABOT.Features.DeepDungeons
                 catch (Exception ex) { Svc.Log.Error(ex, $"[{Name}] use failed"); }
             }
 
-            if (isActive)
+            if (color.HasValue)
                 ImGui.PopStyleColor();
+        }
+
+        // Resolves a row's text color: a transient blue<->white pulse right after pickup, otherwise
+        // green while active on the floor, otherwise default (null = no override).
+        private Vector4? GetRowColor(string name, bool isActive)
+        {
+            var resting = isActive ? ActiveGreen : (Vector4?)null;
+
+            if (_flashStart.TryGetValue(name, out var start))
+            {
+                var elapsed = (DateTime.Now - start).TotalSeconds;
+                if (elapsed >= 0 && elapsed <= FlashDuration)
+                {
+                    // Oscillate blue<->white several times, then ease back to the resting color so
+                    // the flash decays smoothly instead of cutting off mid-pulse.
+                    var pulse = (float)(0.5 + 0.5 * Math.Sin(elapsed * Math.PI * 6));
+                    var flash = Vector4.Lerp(FlashBlue, FlashWhite, pulse);
+                    var fade = (float)(elapsed / FlashDuration);
+                    return Vector4.Lerp(flash, resting ?? FlashWhite, fade);
+                }
+                _flashStart.Remove(name);
+            }
+
+            return resting;
         }
 
         // Effect summaries are two-word blurbs keyed off the canonical pomander/magicite name.
@@ -487,6 +566,26 @@ namespace YABOT.Features.DeepDungeons
             { "Barkbalm", "double HP" },
             { "Poisonfruit", "invuln nuke" },
         };
+
+        // A few pomanders apply an ordinary player status instead of the floor-wide effect the
+        // DeepDungeon struct's IsActive flag tracks, so we detect those by status ID. Keys are the
+        // stripped pomander name; values are the granted status (Strength -> "Damage Up" 687,
+        // Steel -> "Vulnerability Down" 1100). IDs are language-independent.
+        private static readonly Dictionary<string, uint> PomanderStatusId = new(StringComparer.OrdinalIgnoreCase)
+        {
+            { "Strength", 687 },
+            { "Steel", 1100 },
+        };
+
+        private static bool PlayerHasStatus(uint statusId)
+        {
+            var statuses = Svc.Objects.LocalPlayer?.StatusList;
+            if (statuses == null) return false;
+
+            foreach (var s in statuses)
+                if (s.StatusId == statusId) return true;
+            return false;
+        }
 
         private static string StripPomanderPrefix(string name)
         {
