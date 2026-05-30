@@ -20,7 +20,7 @@ namespace YABOT.Features.DeepDungeons
         public override string Name => "Pomander List";
 
         public override string Description =>
-            "While inside a deep dungeon (Palace of the Dead, Heaven-on-High, Eureka Orthos), shows a clickable overlay listing the pomanders and magicite/demiclones you currently hold. Each row shows the icon, name, a short effect summary, and the quantity. Click a row to use that pomander/stone. Optionally shows an estimated mob respawn timer for the current floor. Hold Shift to drag the window to reposition it.";
+            "While inside a deep dungeon (Palace of the Dead, Heaven-on-High, Eureka Orthos), shows a clickable overlay listing the pomanders and magicite/demiclones you currently hold. Each row shows the icon, name, a short effect summary, and the quantity. Click a row to use that pomander/stone. Optionally shows the Beacon of Passage progress percentage and an estimated mob respawn timer for the current floor. Hold Shift to drag the window to reposition it.";
 
         public override FeatureType FeatureType => FeatureType.DeepDungeons;
         public override bool UseAutoConfig => true;
@@ -44,6 +44,9 @@ namespace YABOT.Features.DeepDungeons
 
             [FeatureConfigOption("Hide name (show on hover)")]
             public bool HideName = false;
+
+            [FeatureConfigOption("Show passage progress")]
+            public bool ShowPassageProgress = true;
 
             [FeatureConfigOption("Show respawn timer")]
             public bool ShowRespawnTimer = true;
@@ -104,6 +107,7 @@ namespace YABOT.Features.DeepDungeons
         private static readonly Vector4 FlashBlue = new(0.35f, 0.6f, 1f, 1f);
         private static readonly Vector4 FlashWhite = new(1f, 1f, 1f, 1f);
         private static readonly Vector4 ActiveGreen = new(0.55f, 1f, 0.55f, 1f);
+        private static readonly Vector4 RespawnAmber = new(1f, 0.78f, 0.25f, 1f);
         private const double FlashDuration = 2.5;
         private const uint FlashArrowIconId = 60358; // green up-arrow (pickup); rotated 90 CW to point right
         private const uint CappedArrowIconId = 60361; // blue triangle (already capped); rotated the same way
@@ -277,7 +281,7 @@ namespace YABOT.Features.DeepDungeons
                 ImGui.SetWindowFontScale(Math.Clamp(Config.WindowScale, 0.5f, 3f));
 
                 UpdateFloorTracking(dd);
-                DrawRespawnTimer(dd);
+                DrawStatusLine(dd);
                 DrawPomanderRows(dd, ddRow, prime);
                 DrawMagiciteRows(dd, ddRow, prime);
 
@@ -358,33 +362,74 @@ namespace YABOT.Features.DeepDungeons
             }
         }
 
-        private void DrawRespawnTimer(InstanceContentDeepDungeon* dd)
+        // The status line sits above the item rows: Beacon of Passage progress on the left and the
+        // dead-reckoned respawn timer on the right, both optional. Either can be hidden, and both are
+        // suppressed on boss floors (no passage, no respawns there).
+        private void DrawStatusLine(InstanceContentDeepDungeon* dd)
         {
-            if (!Config.ShowRespawnTimer) return;
-            if (!DeepDungeonRespawn.TryGetInterval(dd->DeepDungeonId, dd->Floor, out var interval)) return;
+            var boss = DeepDungeonRespawn.IsBossFloor(dd->DeepDungeonId, dd->Floor);
+            var showPassage = Config.ShowPassageProgress && !boss;
 
-            // Cycle the countdown by advancing through whole intervals since floor entry.
-            var elapsed = (DateTime.Now - _floorEnterTime).TotalSeconds;
-            var remaining = interval - elapsed % interval;
-            var label = $"Respawn  {TimeSpan.FromSeconds(remaining):mm\\:ss}";
+            var interval = 0;
+            var showRespawn = Config.ShowRespawnTimer
+                && DeepDungeonRespawn.TryGetInterval(dd->DeepDungeonId, dd->Floor, out interval);
 
-            // Tint amber in the final few seconds so an imminent wave is easy to catch at a glance.
-            if (remaining <= 5)
-                ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(1f, 0.78f, 0.25f, 1f));
+            if (!showPassage && !showRespawn) return;
+
+            // Left-to-right segments: passage progress first, then the timer to its right.
+            var segments = new List<(string Text, Vector4? Color)>(2);
+
+            if (showPassage)
+            {
+                // PassageProgress fills 0-10 as the floor is cleared and reads >=11 once the beacon
+                // is open; surface it as a 0-100% tracker, green once it's open.
+                var raw = dd->PassageProgress;
+                var open = raw >= 11;
+                var pct = open ? 100 : Math.Min((int)raw, 10) * 10;
+                segments.Add(($"Passage  {pct}%", open ? ActiveGreen : (Vector4?)null));
+            }
+
+            if (showRespawn)
+            {
+                // Cycle the countdown by advancing through whole intervals since floor entry.
+                var elapsed = (DateTime.Now - _floorEnterTime).TotalSeconds;
+                var remaining = interval - elapsed % interval;
+                // Tint amber in the final few seconds so an imminent wave is easy to catch at a glance.
+                segments.Add(($"Respawn  {TimeSpan.FromSeconds(remaining):mm\\:ss}",
+                    remaining <= 5 ? RespawnAmber : (Vector4?)null));
+            }
+
+            DrawInlineSegments(segments);
+            ImGui.Spacing();
+        }
+
+        // Draws a row of colored text segments separated by a one-em gap, right-aligned as a group
+        // when the panel is right-aligned (matching how the item rows hug the right edge).
+        private void DrawInlineSegments(List<(string Text, Vector4? Color)> segments)
+        {
+            var gap = ImGui.GetFontSize();
 
             if (Config.RightAlign)
             {
+                var total = 0f;
+                for (var i = 0; i < segments.Count; i++)
+                {
+                    total += ImGui.CalcTextSize(segments[i].Text).X;
+                    if (i > 0) total += gap;
+                }
                 var avail = ImGui.GetContentRegionAvail().X;
-                var width = ImGui.CalcTextSize(label).X;
-                if (avail > width)
-                    ImGui.SetCursorPosX(ImGui.GetCursorPosX() + avail - width);
+                if (avail > total)
+                    ImGui.SetCursorPosX(ImGui.GetCursorPosX() + avail - total);
             }
-            ImGui.TextUnformatted(label);
 
-            if (remaining <= 5)
-                ImGui.PopStyleColor();
-
-            ImGui.Spacing();
+            for (var i = 0; i < segments.Count; i++)
+            {
+                if (i > 0) ImGui.SameLine(0, gap);
+                var (text, color) = segments[i];
+                if (color.HasValue) ImGui.PushStyleColor(ImGuiCol.Text, color.Value);
+                ImGui.TextUnformatted(text);
+                if (color.HasValue) ImGui.PopStyleColor();
+            }
         }
 
         private void DrawPomanderRows(InstanceContentDeepDungeon* dd, DeepDungeon ddRow, bool prime)
@@ -478,9 +523,13 @@ namespace YABOT.Features.DeepDungeons
                 var (icon, name) = ResolveStoneSlot(type, slotRef.RowId, stoneSheet, demicloneSheet);
                 if (string.IsNullOrEmpty(name)) continue;
 
-                // Duplicate magicite occupy separate slots but share a name, so key the flash by
-                // slot - otherwise picking up a second copy lights the arrow on both rows.
-                if (!prime && typeByte != prevType)
+                // Flash only on an empty->occupied transition (prevType == 0): a real pickup always
+                // lands in a free slot (you can hold at most 3 and can't pick up while full). Using a
+                // stone compacts the array - the survivors shift down toward slot 0 - so an occupied
+                // slot's value changes (nonzero->nonzero, or nonzero->0 at the tail) without anything
+                // being picked up; keying off prevType == 0 ignores that shift. Duplicate magicite
+                // share a name across slots, so the flash key stays per-slot to light only the new row.
+                if (!prime && prevType == 0)
                     _flashStart[MagiciteRowKey(name, (uint)inventorySlot)] = (DateTime.Now, FlashKind.Pickup);
 
                 rows.Add((icon, name, (byte)1, (uint)inventorySlot));

@@ -24,7 +24,7 @@ namespace YABOT.Features.DeepDungeons
         {
             seconds = 0;
             if (floor <= 0) return false;
-            if (floor % 10 == 0 || (deepDungeonId == 3 && floor == 99)) return false;
+            if (IsBossFloor(deepDungeonId, floor)) return false;
 
             var table = deepDungeonId == 1 ? Potd : HoHLike;
             var set = (floor - 1) / 10;
@@ -33,5 +33,14 @@ namespace YABOT.Features.DeepDungeons
             seconds = table[set];
             return true;
         }
+
+        /// <summary>
+        /// Boss/transition floors (every 10th) and Eureka Orthos' floor 99 have neither mob
+        /// respawns nor a Beacon of Passage - you advance via the boss, not by clearing the floor.
+        /// </summary>
+        /// <param name="deepDungeonId">DeepDungeon sheet row: 1 = PotD, 2 = HoH, 3 = EO, 4 = Pilgrim's Traverse.</param>
+        /// <param name="floor">Absolute floor number (1-200).</param>
+        public static bool IsBossFloor(int deepDungeonId, int floor)
+            => floor % 10 == 0 || (deepDungeonId == 3 && floor == 99);
     }
 }
