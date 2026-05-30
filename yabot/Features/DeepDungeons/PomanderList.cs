@@ -1,4 +1,5 @@
 using Dalamud.Bindings.ImGui;
+using Dalamud.Game.Chat;
 using Dalamud.Interface.Utility;
 using ECommons.DalamudServices;
 using ECommons.ImGuiMethods;
@@ -9,6 +10,7 @@ using YABOT.FeaturesSetup;
 using YABOT.UI;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Numerics;
 
 namespace YABOT.Features.DeepDungeons
@@ -48,6 +50,22 @@ namespace YABOT.Features.DeepDungeons
 
             [FeatureConfigOption("Lock panel (disable Shift to move)")]
             public bool LockPanel = false;
+
+            [FeatureConfigOption("When a coffer holds a pomander you're already at max on:", "RadioEnum")]
+            public CappedAction CappedPomanderAction = CappedAction.Off;
+        }
+
+        // What to do when a coffer can't be picked up because we're capped on that pomander.
+        public enum CappedAction
+        {
+            [Description("Do nothing (just flash the row)")]
+            Off,
+
+            [Description("Use one automatically to free a slot")]
+            AutoUse,
+
+            [Description("Ask with a mid-screen Yes/No prompt")]
+            Prompt,
         }
 
         public Configs Config { get; private set; } = null!;
@@ -63,34 +81,115 @@ namespace YABOT.Features.DeepDungeons
 
         // Flash a row's text blue<->white briefly when its count goes up, so a freshly acquired
         // pomander/magicite is easy to spot. Counts are tracked per slot (so a 0->1 pickup is
-        // caught); the flash is keyed by the same name DrawRow draws under. Tracking is "primed"
-        // without flashing on the first draw and on dungeon re-entry so existing stock stays dark.
+        // caught); the flash is keyed by the same name DrawRow draws under. On entry/re-entry we
+        // "prime" the baseline without flashing for a short grace window - the saved stock doesn't
+        // populate on the very first frame (counts arrive 0 then jump to their real values a frame
+        // or two later), and a one-frame prime would read that jump as a pickup on every row.
         private readonly byte[] _prevPomanderCounts = new byte[16];
         private readonly byte[] _prevMagiciteSlots = new byte[3];
-        private bool _trackingPrimed;
-        private readonly Dictionary<string, DateTime> _flashStart = new(StringComparer.Ordinal);
+        private DateTime _primeUntil = DateTime.MinValue;
+        private const double PrimeGraceSeconds = 3.0;
+
+        // Pending "use a capped pomander?" prompt (Prompt mode). Holds the slot to use, the name to
+        // show, and an auto-dismiss time so a stale prompt doesn't linger.
+        private uint? _promptSlot;
+        private string _promptName = string.Empty;
+        private DateTime _promptExpiry;
+        private const double PromptTimeoutSeconds = 15.0;
+
+        // Pickup = green arrows when a count went up; Capped = blue arrows when the game told us we
+        // can't carry any more of that item (returned to the coffer), hinting to use one first.
+        private enum FlashKind { Pickup, Capped }
+        private readonly Dictionary<string, (DateTime Start, FlashKind Kind)> _flashStart = new(StringComparer.Ordinal);
         private static readonly Vector4 FlashBlue = new(0.35f, 0.6f, 1f, 1f);
         private static readonly Vector4 FlashWhite = new(1f, 1f, 1f, 1f);
         private static readonly Vector4 ActiveGreen = new(0.55f, 1f, 0.55f, 1f);
-        private const double FlashDuration = 1.5;
+        private const double FlashDuration = 2.5;
+        private const uint FlashArrowIconId = 60358; // green up-arrow (pickup); rotated 90 CW to point right
+        private const uint CappedArrowIconId = 60361; // blue triangle (already capped); rotated the same way
+        private const float FlashArrowSizeMul = 1.95f; // per-arrow size vs the row icon (~30% larger)
+        private const int FlashArrowCount = 3; // ">>>" stacked chevrons
+        private const float FlashArrowStepMul = 0.25f; // horizontal step between arrows (fraction of size)
+        private const float FlashArrowBounceMul = 0.4f; // bounce travel vs the row icon size
+        private const double FlashArrowBouncePeriod = 0.45; // seconds per right-bounce
 
         public override void Enable()
         {
             Config = LoadConfig<Configs>() ?? new Configs();
             _prevRightAlign = Config.RightAlign;
             Overlay = new(this);
+            Svc.Chat.ChatMessage += OnChatMessage;
             base.Enable();
         }
 
         public override void Disable()
         {
             SaveConfig(Config);
+            Svc.Chat.ChatMessage -= OnChatMessage;
             if (Overlay != null)
             {
                 P.Ws.RemoveWindow(Overlay);
                 Overlay = null!;
             }
             base.Disable();
+        }
+
+        // The game prints "You return the <item> to the coffer. You cannot carry any more of that
+        // item." when a coffer holds a pomander you're already capped on. Flash that row blue so the
+        // player knows which one to use to make room - and, if enabled, use one automatically.
+        private void OnChatMessage(IHandleableChatMessage chatMessage)
+        {
+            try
+            {
+                var ef = EventFramework.Instance();
+                if (ef == null) return;
+                var dd = ef->GetInstanceContentDeepDungeon();
+                if (dd == null) return;
+                if (!Svc.Data.GetExcelSheet<DeepDungeon>().TryGetRow((uint)dd->DeepDungeonId, out var ddRow))
+                    return;
+
+                var text = chatMessage.Message.TextValue;
+                if (!text.Contains("cannot carry any more", StringComparison.OrdinalIgnoreCase)) return;
+
+                // Match against the dungeon's own pomander slots so we land on the exact slot the
+                // line names (and pick the right pomander/protomander variant for this dungeon).
+                var pomanderSheet = Svc.Data.GetExcelSheet<DeepDungeonItem>();
+                for (var slot = 0; slot < 16; slot++)
+                {
+                    var slotRef = ddRow.PomanderSlot[slot];
+                    if (slotRef.RowId == 0) continue;
+                    if (!pomanderSheet.TryGetRow(slotRef.RowId, out var pomander)) continue;
+
+                    var singular = pomander.Singular.ToString();
+                    if (string.IsNullOrEmpty(singular)) continue;
+                    if (!text.Contains(singular, StringComparison.OrdinalIgnoreCase)) continue;
+
+                    var shortName = StripPomanderPrefix(pomander.Name.ToString());
+
+                    // Flash the row blue (keyed off the stripped name DrawRow draws under).
+                    _flashStart[shortName] = (DateTime.Now, FlashKind.Capped);
+
+                    // Nothing to spend if we don't actually hold one.
+                    if (dd->Items[slot].Count == 0) break;
+
+                    switch (Config.CappedPomanderAction)
+                    {
+                        case CappedAction.AutoUse:
+                            dd->UsePomander((uint)slot);
+                            break;
+                        case CappedAction.Prompt:
+                            _promptSlot = (uint)slot;
+                            _promptName = shortName;
+                            _promptExpiry = DateTime.Now.AddSeconds(PromptTimeoutSeconds);
+                            break;
+                    }
+                    break;
+                }
+            }
+            catch (Exception ex)
+            {
+                Svc.Log.Error(ex, $"[{Name}] chat handler failed");
+            }
         }
 
         public override bool DrawConditions()
@@ -123,14 +222,14 @@ namespace YABOT.Features.DeepDungeons
                 var frame = ImGui.GetFrameCount();
                 var reappearing = frame - _lastDrawFrame > 1;
 
-                // On the first draw and on re-entry, record current counts as the baseline without
-                // flashing - otherwise everything we already hold would light up on appearance.
+                // On the first draw and on re-entry, prime the baseline (no flashing) for a short
+                // grace window so the saved stock settling in over the next frames doesn't light up.
                 if (reappearing)
                 {
-                    _trackingPrimed = false;
+                    _primeUntil = DateTime.Now.AddSeconds(PrimeGraceSeconds);
                     _flashStart.Clear();
                 }
-                var prime = !_trackingPrimed;
+                var prime = DateTime.Now < _primeUntil;
 
                 // Toggling alignment re-anchors to the window's current spot so it doesn't jump
                 // to a stale remembered corner; the corner is recaptured after this frame draws.
@@ -181,7 +280,6 @@ namespace YABOT.Features.DeepDungeons
                 DrawRespawnTimer(dd);
                 DrawPomanderRows(dd, ddRow, prime);
                 DrawMagiciteRows(dd, ddRow, prime);
-                _trackingPrimed = true;
 
                 ImGui.SetWindowFontScale(1f);
 
@@ -201,11 +299,50 @@ namespace YABOT.Features.DeepDungeons
 
                 ImGui.PopStyleVar(2);
                 ImGui.PopStyleColor();
+
+                DrawCappedPrompt(dd);
             }
             catch (Exception ex)
             {
                 Svc.Log.Error(ex, $"[{Name}] Draw failed");
             }
+        }
+
+        // Mid-screen Yes/No prompt (Prompt mode) asking whether to spend one of a capped pomander.
+        private void DrawCappedPrompt(InstanceContentDeepDungeon* dd)
+        {
+            if (_promptSlot is not { } slot) return;
+            if (DateTime.Now > _promptExpiry)
+            {
+                _promptSlot = null;
+                return;
+            }
+
+            var center = ImGui.GetMainViewport().GetCenter();
+            ImGuiHelpers.ForceNextWindowMainViewport();
+            ImGui.SetNextWindowPos(center, ImGuiCond.Always, new Vector2(0.5f, 0.5f));
+            ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(16, 14));
+
+            if (ImGui.Begin("Use pomander?###YABOTCappedPrompt",
+                ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoSavedSettings
+                | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoFocusOnAppearing))
+            {
+                ImGui.TextUnformatted($"At max {_promptName}. Use one to free a slot?");
+                ImGui.Spacing();
+
+                if (ImGui.Button("Yes", new Vector2(120, 0)))
+                {
+                    try { dd->UsePomander(slot); }
+                    catch (Exception ex) { Svc.Log.Error(ex, $"[{Name}] prompt use failed"); }
+                    _promptSlot = null;
+                }
+                ImGui.SameLine();
+                if (ImGui.Button("No", new Vector2(120, 0)))
+                    _promptSlot = null;
+            }
+            ImGui.End();
+
+            ImGui.PopStyleVar();
         }
 
         private void UpdateFloorTracking(InstanceContentDeepDungeon* dd)
@@ -282,11 +419,12 @@ namespace YABOT.Features.DeepDungeons
                 if (info.Count == 0 && !isActive) continue;
 
                 if (!prime && info.Count > prevCount)
-                    _flashStart[shortName] = DateTime.Now;
+                    _flashStart[shortName] = (DateTime.Now, FlashKind.Pickup);
 
                 var slotCapture = (uint)slot;
                 DrawRow(
                     pomander.Icon,
+                    shortName,
                     shortName,
                     LookupDescription(name, PomanderDescriptions),
                     info.Count,
@@ -340,9 +478,10 @@ namespace YABOT.Features.DeepDungeons
                 var (icon, name) = ResolveStoneSlot(type, slotRef.RowId, stoneSheet, demicloneSheet);
                 if (string.IsNullOrEmpty(name)) continue;
 
-                // Magicite is one-per-slot, so a slot changing to a new (or any) type is a pickup.
+                // Duplicate magicite occupy separate slots but share a name, so key the flash by
+                // slot - otherwise picking up a second copy lights the arrow on both rows.
                 if (!prime && typeByte != prevType)
-                    _flashStart[name] = DateTime.Now;
+                    _flashStart[MagiciteRowKey(name, (uint)inventorySlot)] = (DateTime.Now, FlashKind.Pickup);
 
                 rows.Add((icon, name, (byte)1, (uint)inventorySlot));
             }
@@ -356,6 +495,7 @@ namespace YABOT.Features.DeepDungeons
                 DrawRow(
                     row.Icon,
                     row.Name,
+                    MagiciteRowKey(row.Name, row.Slot),
                     LookupDescription(row.Name, MagiciteDescriptions),
                     row.Count,
                     showCount: false,
@@ -363,6 +503,9 @@ namespace YABOT.Features.DeepDungeons
                     () => dd->UseStone(slotCapture));
             }
         }
+
+        // Per-slot flash/row identity for magicite, since duplicates share a display name.
+        private static string MagiciteRowKey(string name, uint slot) => $"{name}#{slot}";
 
         private static (uint Icon, string Name) ResolveStoneSlot(
             byte deepDungeonType,
@@ -383,7 +526,7 @@ namespace YABOT.Features.DeepDungeons
             return (0, string.Empty);
         }
 
-        private void DrawRow(uint iconId, string name, string desc, byte count, bool showCount, bool isActive, System.Action onClick)
+        private void DrawRow(uint iconId, string name, string rowKey, string desc, byte count, bool showCount, bool isActive, System.Action onClick)
         {
             // GetFontSize reflects the SetWindowFontScale already pushed in Draw, so icons
             // track the configured scale via font size alone.
@@ -392,18 +535,24 @@ namespace YABOT.Features.DeepDungeons
             var label = Config.HideName
                 ? (string.IsNullOrEmpty(desc) ? qty.TrimStart() : $"{desc}{qty}")
                 : (string.IsNullOrEmpty(desc) ? $"{name}{qty}" : $"{name} - {desc}{qty}");
-            // The selectable's hover label needs to be unique per row so isActive coloring
-            // and clicks don't collide between rows that share text.
-            var hiddenId = $"###{name}_row";
+            // rowKey uniquely identifies the row (display name isn't unique - duplicate magicite
+            // share a name across slots), so the selectable ID, ImGui ID and flash lookup all key
+            // off it to keep rows that share text from colliding.
+            var hiddenId = $"###{rowKey}_row";
 
-            ImGui.PushID(name);
+            ImGui.PushID(rowKey);
 
-            var color = GetRowColor(name, isActive);
+            // A flash takes the text color and adds the left arrows; otherwise fall back to the
+            // resting color (green when active, default otherwise). The kind picks the arrow icon:
+            // green for a fresh pickup, blue when we're capped on it.
+            var flashing = TryGetFlashColor(rowKey, out var flashColor, out var bounce, out var kind);
+            var color = flashing ? flashColor : (isActive ? ActiveGreen : (Vector4?)null);
+            var arrowIcon = kind == FlashKind.Capped ? CappedArrowIconId : FlashArrowIconId;
 
             if (Config.RightAlign)
-                DrawRowRightAligned(iconId, iconSize, label, hiddenId, color, onClick);
+                DrawRowRightAligned(iconId, iconSize, label, hiddenId, color, flashing, bounce, arrowIcon, onClick);
             else
-                DrawRowLeftAligned(iconId, iconSize, label, hiddenId, color, onClick);
+                DrawRowLeftAligned(iconId, iconSize, label, hiddenId, color, flashing, bounce, arrowIcon, onClick);
 
             // Tooltip surfaces the canonical name when it's hidden, and the active-on-floor
             // marker either way. Combined into one tooltip so they don't fight for the hover.
@@ -419,31 +568,39 @@ namespace YABOT.Features.DeepDungeons
             ImGui.PopID();
         }
 
-        private void DrawRowLeftAligned(uint iconId, float iconSize, string label, string id, Vector4? color, System.Action onClick)
+        private void DrawRowLeftAligned(uint iconId, float iconSize, string label, string id, Vector4? color, bool flashing, float bounce, uint arrowIcon, System.Action onClick)
         {
+            var startY = ImGui.GetCursorPosY();
+            if (flashing)
+                DrawFlashArrow(iconSize, bounce, arrowIcon);
+
             DrawIcon(iconId, iconSize);
             ImGui.SameLine();
 
             var textOffsetY = (iconSize - ImGui.GetTextLineHeight()) * 0.5f;
             if (textOffsetY > 0)
-                ImGui.SetCursorPosY(ImGui.GetCursorPosY() + textOffsetY);
+                ImGui.SetCursorPosY(startY + textOffsetY);
 
             DrawSelectable(label + id, 0f, iconSize, color, onClick);
         }
 
-        private void DrawRowRightAligned(uint iconId, float iconSize, string label, string id, Vector4? color, System.Action onClick)
+        private void DrawRowRightAligned(uint iconId, float iconSize, string label, string id, Vector4? color, bool flashing, float bounce, uint arrowIcon, System.Action onClick)
         {
             // Push the row to the right edge of the auto-resized window. ContentRegionAvail is
             // the widest row's width (set by previous frames in AlwaysAutoResize windows), so
             // shorter rows still settle next to the right edge across frames.
             var gap = ImGui.GetStyle().ItemSpacing.X;
             var labelWidth = ImGui.CalcTextSize(label).X + ImGui.GetStyle().FramePadding.X * 2f;
-            var totalWidth = labelWidth + gap + iconSize;
+            var arrowWidth = flashing ? FlashArrowWidth(iconSize) + gap : 0f;
+            var totalWidth = arrowWidth + labelWidth + gap + iconSize;
             var avail = ImGui.GetContentRegionAvail().X;
             if (avail > totalWidth)
                 ImGui.SetCursorPosX(ImGui.GetCursorPosX() + avail - totalWidth);
 
             var startY = ImGui.GetCursorPosY();
+            if (flashing)
+                DrawFlashArrow(iconSize, bounce, arrowIcon);
+
             var textOffsetY = (iconSize - ImGui.GetTextLineHeight()) * 0.5f;
             if (textOffsetY > 0)
                 ImGui.SetCursorPosY(startY + textOffsetY);
@@ -482,24 +639,74 @@ namespace YABOT.Features.DeepDungeons
         // green while active on the floor, otherwise default (null = no override).
         private Vector4? GetRowColor(string name, bool isActive)
         {
-            var resting = isActive ? ActiveGreen : (Vector4?)null;
+            if (TryGetFlashColor(name, out var flash, out _, out _))
+                return flash;
+            return isActive ? ActiveGreen : (Vector4?)null;
+        }
 
-            if (_flashStart.TryGetValue(name, out var start))
+        // True while the row is mid-flash; outputs the current pulsing text color, a 0..1 bounce
+        // value (the arrows nudge right and back each period), and the flash kind (which selects the
+        // arrow icon) so the marker arrows and the text share one timeline.
+        private bool TryGetFlashColor(string name, out Vector4 textColor, out float bounce, out FlashKind kind)
+        {
+            textColor = default;
+            bounce = 0f;
+            kind = FlashKind.Pickup;
+            if (!_flashStart.TryGetValue(name, out var flash)) return false;
+            kind = flash.Kind;
+
+            var elapsed = (DateTime.Now - flash.Start).TotalSeconds;
+            if (elapsed < 0 || elapsed > FlashDuration)
             {
-                var elapsed = (DateTime.Now - start).TotalSeconds;
-                if (elapsed >= 0 && elapsed <= FlashDuration)
-                {
-                    // Oscillate blue<->white several times, then ease back to the resting color so
-                    // the flash decays smoothly instead of cutting off mid-pulse.
-                    var pulse = (float)(0.5 + 0.5 * Math.Sin(elapsed * Math.PI * 6));
-                    var flash = Vector4.Lerp(FlashBlue, FlashWhite, pulse);
-                    var fade = (float)(elapsed / FlashDuration);
-                    return Vector4.Lerp(flash, resting ?? FlashWhite, fade);
-                }
                 _flashStart.Remove(name);
+                return false;
             }
 
-            return resting;
+            // Oscillate blue<->white several times, easing toward white as it ends so the text
+            // decays smoothly instead of cutting off mid-pulse.
+            var pulse = (float)(0.5 + 0.5 * Math.Sin(elapsed * Math.PI * 6));
+            var fade = (float)(elapsed / FlashDuration);
+            textColor = Vector4.Lerp(Vector4.Lerp(FlashBlue, FlashWhite, pulse), FlashWhite, fade);
+            // Ease 0 -> 1 -> 0 over each bounce period for a repeated rightward nudge.
+            var phase = (elapsed % FlashArrowBouncePeriod) / FlashArrowBouncePeriod;
+            bounce = (float)Math.Sin(phase * Math.PI);
+            return true;
+        }
+
+        private static float FlashArrowWidth(float iconSize)
+            => iconSize * FlashArrowSizeMul * (1f + FlashArrowStepMul * (FlashArrowCount - 1));
+
+        // Draws the ">>>" pickup marker at the left edge of a row: FlashArrowCount copies of the
+        // green up-arrow game icon, each rotated 90 clockwise (via cycled UVs) so they point right
+        // and stepped across to read as a chevron, nudging right and back by the bounce. Painted to
+        // the draw list so the oversized glyphs don't inflate the row's line height, with a Dummy
+        // reserving the width so the icon/text that follow on the same line sit to their right.
+        private void DrawFlashArrow(float iconSize, float bounce, uint arrowIcon)
+        {
+            var size = iconSize * FlashArrowSizeMul;
+            var step = size * FlashArrowStepMul;
+            var bounceX = bounce * iconSize * FlashArrowBounceMul;
+            if (arrowIcon != 0 && ThreadLoadImageHandler.TryGetIconTextureWrap(arrowIcon, false, out var tex) && tex != null)
+            {
+                var pos = ImGui.GetCursorScreenPos();
+                var top = pos.Y + (iconSize - size) * 0.5f; // centre the larger arrows on the row icon
+                var col = ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 1f, 1f, 1f));
+                var dl = ImGui.GetWindowDrawList();
+                for (var i = 0; i < FlashArrowCount; i++)
+                {
+                    var x = pos.X + bounceX + step * i;
+                    var tl = new Vector2(x, top);
+                    var tr = new Vector2(x + size, top);
+                    var br = new Vector2(x + size, top + size);
+                    var bl = new Vector2(x, top + size);
+                    // Cycle the UVs one corner clockwise so the up-arrow source renders pointing right.
+                    dl.AddImageQuad(tex.Handle, tl, tr, br, bl,
+                        new Vector2(0, 1), new Vector2(0, 0), new Vector2(1, 0), new Vector2(1, 1), col);
+                }
+            }
+
+            ImGui.Dummy(new Vector2(FlashArrowWidth(iconSize), iconSize));
+            ImGui.SameLine();
         }
 
         // Effect summaries are two-word blurbs keyed off the canonical pomander/magicite name.

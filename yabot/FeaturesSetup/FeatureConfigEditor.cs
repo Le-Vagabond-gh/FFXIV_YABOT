@@ -2,13 +2,48 @@ using Dalamud.Interface;
 using ECommons.ImGuiMethods;
 using ECommons.ImGuiMethods.TerritorySelection;
 using Dalamud.Bindings.ImGui;
+using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Numerics;
+using System.Reflection;
 
 namespace YABOT.FeaturesSetup
 {
     public static class FeatureConfigEditor
     {
+        // Generic radio-button picker for any enum config field. Labels come from a [Description]
+        // attribute on each enum member when present, otherwise the member name.
+        public static bool RadioEnumEditor(string name, ref object configOption)
+        {
+            if (configOption is not Enum) return false;
+
+            var type = configOption.GetType();
+            var changed = false;
+
+            if (!string.IsNullOrEmpty(name))
+                ImGui.TextUnformatted(name);
+
+            foreach (var value in Enum.GetValues(type))
+            {
+                if (ImGui.RadioButton($"{EnumLabel(type, value!)}##{name}_{value}", configOption.Equals(value)))
+                {
+                    configOption = value!;
+                    changed = true;
+                }
+            }
+
+            return changed;
+        }
+
+        private static string EnumLabel(Type type, object value)
+        {
+            var member = type.GetMember(value.ToString()!);
+            if (member.Length > 0 && member[0].GetCustomAttribute<DescriptionAttribute>() is { } desc)
+                return desc.Description;
+            return value.ToString()!;
+        }
+
         public static bool ColorEditor(string name, ref object configOption)
         {
             switch (configOption)
