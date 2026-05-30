@@ -46,6 +46,17 @@ public abstract class BaseFeature
 
     public abstract FeatureType FeatureType { get; }
 
+    /// <summary>
+    /// Extra categories this feature also appears under in the sidebar, beyond its primary
+    /// <see cref="FeatureType"/>. Defaults to none. Used e.g. for a plugin-mod that is also
+    /// relevant to a content category (so it shows under both).
+    /// </summary>
+    public virtual System.Collections.Generic.IEnumerable<FeatureType> AdditionalCategories =>
+        System.Array.Empty<FeatureType>();
+
+    /// <summary>True when this feature belongs to <paramref name="type"/> as its primary or an additional category.</summary>
+    public bool InCategory(FeatureType type) => FeatureType == type || AdditionalCategories.Contains(type);
+
     public void InterfaceSetup(Plugin plugin, IDalamudPluginInterface pluginInterface, Configuration config, FeatureProvider fp)
     {
         this.config = config;

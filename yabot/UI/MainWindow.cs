@@ -73,7 +73,7 @@ internal class MainWindow : Window
 
                 foreach (var (label, type) in Categories)
                 {
-                    if (type.HasValue && !P.Features.Any(f => f.FeatureType == type.Value))
+                    if (type.HasValue && !P.Features.Any(f => f.InCategory(type.Value)))
                         continue;
 
                     if (ImGui.Selectable(label, OpenWindow == label))
@@ -141,11 +141,11 @@ internal class MainWindow : Window
                         else if (type == FeatureType.PluginMods)
                         {
                             DrawPluginModsHeader();
-                            DrawFeatures(P.Features.Where(x => x.FeatureType == type).ToArray(), header: match.Label);
+                            DrawFeatures(P.Features.Where(x => x.InCategory(type)).ToArray(), header: match.Label);
                         }
                         else
                         {
-                            DrawFeatures(P.Features.Where(x => x.FeatureType == type).ToArray(), header: match.Label);
+                            DrawFeatures(P.Features.Where(x => x.InCategory(type)).ToArray(), header: match.Label);
                         }
                     }
                 }
