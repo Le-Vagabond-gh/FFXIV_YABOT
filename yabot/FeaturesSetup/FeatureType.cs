@@ -11,5 +11,6 @@ namespace YABOT.FeaturesSetup
         OccultCrescent,
         DeepDungeons,
         PluginMods,
+        CosmicExploration,
     }
 }

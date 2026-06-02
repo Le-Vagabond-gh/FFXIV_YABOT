@@ -1,0 +1,5 @@
+# Cosmic Collectable Auto-Rotation
+
+Adds a small toggle button to the bottom-left of the collectable gathering window (the `GatheringMasterpiece` minigame). While the toggle is ON, it automatically plays the optimal collectable rotation each time the window is open: it builds collectability with Scrutiny / Meticulous / Brazen, recovers integrity with Solid Reason (Ageless Words) and Wise to the World, spends Collector's High Standard charges when available, then Collects once the high-grade tier is reached. A stuck-detector falls through to Collect if collectability stalls for more than 5 seconds.
+
+The rotation engine is ported from Ice's Cosmic Exploration (`Task_Gather.CollectableGather`), but only the masterpiece logic - so it works on any Cosmic gathering node, including new planets ICE doesn't support yet. You drive to the node and open it yourself; this feature only handles the minigame. Miner and Botanist are supported. Click the button again (or disable the feature) to stop immediately. The action delay and whether the toggle starts ON when a window opens are configurable.
