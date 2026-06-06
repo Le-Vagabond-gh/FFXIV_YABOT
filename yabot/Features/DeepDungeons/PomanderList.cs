@@ -1,5 +1,6 @@
 using Dalamud.Bindings.ImGui;
 using Dalamud.Game.Chat;
+using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Interface.Utility;
 using ECommons.DalamudServices;
 using ECommons.ImGuiMethods;
@@ -20,7 +21,7 @@ namespace YABOT.Features.DeepDungeons
         public override string Name => "Pomander List";
 
         public override string Description =>
-            "While inside a deep dungeon (Palace of the Dead, Heaven-on-High, Eureka Orthos), shows a clickable overlay listing the pomanders and magicite/demiclones you currently hold. Each row shows the icon, name, a short effect summary, and the quantity. Click a row to use that pomander/stone. Optionally shows the Beacon of Passage progress percentage and an estimated mob respawn timer for the current floor. Hold Shift to drag the window to reposition it.";
+            "While inside a deep dungeon (Palace of the Dead, Heaven-on-High, Eureka Orthos), shows a clickable overlay listing the pomanders and magicite/demiclones you currently hold. Each row shows the icon, name, a short effect summary, and the quantity. Click a row to use that pomander/stone. Optionally shows the Beacon of Passage progress percentage, a count of monsters killed on the current floor against the floor's kill-to-open range (accounting for a Pomander of Flight used on the previous floor), and an estimated mob respawn timer. Hold Shift to drag the window to reposition it.";
 
         public override FeatureType FeatureType => FeatureType.DeepDungeons;
         public override bool UseAutoConfig => true;
@@ -48,11 +49,17 @@ namespace YABOT.Features.DeepDungeons
             [FeatureConfigOption("Show passage progress")]
             public bool ShowPassageProgress = true;
 
+            [FeatureConfigOption("Show kill counter (kills toward passage, with floor range)")]
+            public bool ShowKillCounter = true;
+
             [FeatureConfigOption("Show respawn timer")]
             public bool ShowRespawnTimer = true;
 
             [FeatureConfigOption("Lock panel (disable Shift to move)")]
             public bool LockPanel = false;
+
+            [FeatureConfigOption("Debug: show raw passage counter")]
+            public bool DebugRawPassage = false;
 
             [FeatureConfigOption("When a coffer holds a pomander you're already at max on:", "RadioEnum")]
             public CappedAction CappedPomanderAction = CappedAction.Off;
@@ -81,6 +88,34 @@ namespace YABOT.Features.DeepDungeons
         // the player entered the current floor, detected by watching dd->Floor change.
         private byte _lastFloor;
         private DateTime _floorEnterTime;
+
+        // Count enemy NPCs killed on the current floor, shown against the per-floorset passage range
+        // (the game exposes no real kill count - PassageProgress just snaps to >=11 when the hidden,
+        // per-floor random threshold is met). Each enemy is counted once on the frame it's first seen
+        // dead, keyed by GameObjectId; both reset on a floor change alongside the respawn anchor.
+        private readonly HashSet<ulong> _countedKills = new();
+        private int _floorKillCount;
+        private const byte EnemySubKind = 5; // BattleNpcSubKind value for a standard enemy/combatant
+
+        // Latched once the beacon opens (raw >= 11) so the kill count freezes at the kills-to-open
+        // value instead of ticking up on cleanup kills. Reset on floor change.
+        private bool _passageOpen;
+
+        // When a magicite/demiclone was last used (from chat). For a short window after, the kill
+        // counter skips the floor-wide death burst the summon produces - it isn't a kills-to-open
+        // signal and would otherwise spike the count.
+        private DateTime _magiciteUsedAt = DateTime.MinValue;
+        private const double MagiciteWipeWindowSeconds = 10.0;
+
+        // Debug: per-floor log of (seconds-since-entry, kills, raw PassageProgress) samples, appended
+        // whenever kills or raw change. Clicking the Raw segment dumps it to /xllog for easy pasting.
+        // Reset on floor change with the rest of the per-floor state.
+        private readonly List<(double T, int Kills, int Raw)> _passageHistory = new();
+
+        // Pomander of Flight takes effect only on the floor *after* it's spent and has no on-floor
+        // status to read, so we remember the floor it was used on (its stock drops) and treat the
+        // immediately following floor as Flighted - where each kill counts double toward the passage.
+        private byte _flightUsedOnFloor;
 
         // Flash a row's text blue<->white briefly when its count goes up, so a freshly acquired
         // pomander/magicite is easy to spot. Counts are tracked per slot (so a 0->1 pickup is
@@ -121,6 +156,7 @@ namespace YABOT.Features.DeepDungeons
         {
             Config = LoadConfig<Configs>() ?? new Configs();
             _prevRightAlign = Config.RightAlign;
+            _flightUsedOnFloor = 0;
             Overlay = new(this);
             Svc.Chat.ChatMessage += OnChatMessage;
             base.Enable();
@@ -138,9 +174,11 @@ namespace YABOT.Features.DeepDungeons
             base.Disable();
         }
 
-        // The game prints "You return the <item> to the coffer. You cannot carry any more of that
-        // item." when a coffer holds a pomander you're already capped on. Flash that row blue so the
-        // player knows which one to use to make room - and, if enabled, use one automatically.
+        // Two pomander chat lines drive state here, both resolved against the dungeon's own slots:
+        //  - "You return the <item> to the coffer. You cannot carry any more of that item." (capped):
+        //    flash the row blue so the player knows which to spend, and optionally use/prompt.
+        //  - "You use a <item>." (used): only Flight matters - it acts on the *next* floor, so we note
+        //    the floor it was spent on; there's no on-floor status to read it back from later.
         private void OnChatMessage(IHandleableChatMessage chatMessage)
         {
             try
@@ -153,47 +191,78 @@ namespace YABOT.Features.DeepDungeons
                     return;
 
                 var text = chatMessage.Message.TextValue;
-                if (!text.Contains("cannot carry any more", StringComparison.OrdinalIgnoreCase)) return;
+                var capped = text.Contains("cannot carry any more", StringComparison.OrdinalIgnoreCase);
+                // "use a" keeps this off the capped/return lines, which never contain it.
+                var used = !capped && text.Contains("use a", StringComparison.OrdinalIgnoreCase);
+                if (!capped && !used) return;
 
-                // Match against the dungeon's own pomander slots so we land on the exact slot the
-                // line names (and pick the right pomander/protomander variant for this dungeon).
-                var pomanderSheet = Svc.Data.GetExcelSheet<DeepDungeonItem>();
-                for (var slot = 0; slot < 16; slot++)
+                // Magicite (HoH) / demiclone (EO) use: e.g. "You use a splinter of Vortex magicite."
+                // These wipe the floor, so flag the time and let the kill counter skip the death burst.
+                // They live in MagiciteSlot, not PomanderSlot, so handle them before the pomander match.
+                if (used && (text.Contains("magicite", StringComparison.OrdinalIgnoreCase)
+                    || text.Contains("demiclone", StringComparison.OrdinalIgnoreCase)))
                 {
-                    var slotRef = ddRow.PomanderSlot[slot];
-                    if (slotRef.RowId == 0) continue;
-                    if (!pomanderSheet.TryGetRow(slotRef.RowId, out var pomander)) continue;
+                    _magiciteUsedAt = DateTime.Now;
+                    return;
+                }
 
-                    var singular = pomander.Singular.ToString();
-                    if (string.IsNullOrEmpty(singular)) continue;
-                    if (!text.Contains(singular, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!TryMatchPomanderSlot(ddRow, text, out var slot, out var shortName))
+                    return;
 
-                    var shortName = StripPomanderPrefix(pomander.Name.ToString());
+                if (used)
+                {
+                    if (shortName.Equals("Flight", StringComparison.OrdinalIgnoreCase))
+                        _flightUsedOnFloor = dd->Floor;
+                    return;
+                }
 
-                    // Flash the row blue (keyed off the stripped name DrawRow draws under).
-                    _flashStart[shortName] = (DateTime.Now, FlashKind.Capped);
+                // Capped: flash the row blue (keyed off the stripped name DrawRow draws under).
+                _flashStart[shortName] = (DateTime.Now, FlashKind.Capped);
 
-                    // Nothing to spend if we don't actually hold one.
-                    if (dd->Items[slot].Count == 0) break;
+                // Nothing to spend if we don't actually hold one.
+                if (dd->Items[slot].Count == 0) return;
 
-                    switch (Config.CappedPomanderAction)
-                    {
-                        case CappedAction.AutoUse:
-                            dd->UsePomander((uint)slot);
-                            break;
-                        case CappedAction.Prompt:
-                            _promptSlot = (uint)slot;
-                            _promptName = shortName;
-                            _promptExpiry = DateTime.Now.AddSeconds(PromptTimeoutSeconds);
-                            break;
-                    }
-                    break;
+                switch (Config.CappedPomanderAction)
+                {
+                    case CappedAction.AutoUse:
+                        dd->UsePomander((uint)slot);
+                        break;
+                    case CappedAction.Prompt:
+                        _promptSlot = (uint)slot;
+                        _promptName = shortName;
+                        _promptExpiry = DateTime.Now.AddSeconds(PromptTimeoutSeconds);
+                        break;
                 }
             }
             catch (Exception ex)
             {
                 Svc.Log.Error(ex, $"[{Name}] chat handler failed");
             }
+        }
+
+        // Finds the dungeon pomander slot a chat line refers to by matching the item's Singular form
+        // (the name the game uses mid-sentence), so we land on the exact slot - and the right
+        // pomander/protomander variant for this dungeon. Returns the slot and its stripped row name.
+        private static bool TryMatchPomanderSlot(DeepDungeon ddRow, string text, out int slot, out string shortName)
+        {
+            slot = -1;
+            shortName = string.Empty;
+            var pomanderSheet = Svc.Data.GetExcelSheet<DeepDungeonItem>();
+            for (var i = 0; i < 16; i++)
+            {
+                var slotRef = ddRow.PomanderSlot[i];
+                if (slotRef.RowId == 0) continue;
+                if (!pomanderSheet.TryGetRow(slotRef.RowId, out var pomander)) continue;
+
+                var singular = pomander.Singular.ToString();
+                if (string.IsNullOrEmpty(singular)) continue;
+                if (!text.Contains(singular, StringComparison.OrdinalIgnoreCase)) continue;
+
+                slot = i;
+                shortName = StripPomanderPrefix(pomander.Name.ToString());
+                return true;
+            }
+            return false;
         }
 
         public override bool DrawConditions()
@@ -281,6 +350,8 @@ namespace YABOT.Features.DeepDungeons
                 ImGui.SetWindowFontScale(Math.Clamp(Config.WindowScale, 0.5f, 3f));
 
                 UpdateFloorTracking(dd);
+                if (Config.ShowKillCounter || Config.DebugRawPassage) TrackKills(dd);
+                if (Config.DebugRawPassage) RecordPassageHistory(dd);
                 DrawStatusLine(dd);
                 DrawPomanderRows(dd, ddRow, prime);
                 DrawMagiciteRows(dd, ddRow, prime);
@@ -357,36 +428,138 @@ namespace YABOT.Features.DeepDungeons
             // early - same inherent caveat as NecroLens.)
             if (dd->Floor != _lastFloor)
             {
+                // Dump the floor we're leaving to /xllog before clearing it (debug only, real floors
+                // only - floor 0 is the pre-load transient). _lastFloor still holds the previous floor
+                // and _flightUsedOnFloor isn't reset yet, so the dump reflects the collected floor.
+                if (Config.DebugRawPassage && _lastFloor != 0 && _passageHistory.Count > 0)
+                    DumpPassageHistory(dd->DeepDungeonId, _lastFloor);
+
+                // A non-sequential change (fresh entry, or a Pomander of Return sending you back)
+                // invalidates a queued Flight - it only ever carries to the next floor in sequence.
+                if (dd->Floor != _lastFloor + 1)
+                    _flightUsedOnFloor = 0;
+
                 _lastFloor = dd->Floor;
                 _floorEnterTime = DateTime.Now;
+                _countedKills.Clear();
+                _floorKillCount = 0;
+                _passageHistory.Clear();
+                _passageOpen = false;
+                _magiciteUsedAt = DateTime.MinValue; // don't let a wipe window bleed into the next floor
             }
         }
 
-        // The status line sits above the item rows: Beacon of Passage progress on the left and the
-        // dead-reckoned respawn timer on the right, both optional. Either can be hidden, and both are
-        // suppressed on boss floors (no passage, no respawns there).
+        // Append a sample when kills or the raw counter changed since the last one (debug only).
+        private void RecordPassageHistory(InstanceContentDeepDungeon* dd)
+        {
+            if (dd->Floor == 0) return; // pre-load transient: floor not established, time not anchored
+            int raw = dd->PassageProgress;
+            var last = _passageHistory.Count > 0 ? _passageHistory[^1] : (T: -1.0, Kills: -1, Raw: -1);
+            if (_floorKillCount == last.Kills && raw == last.Raw) return;
+            _passageHistory.Add(((DateTime.Now - _floorEnterTime).TotalSeconds, _floorKillCount, raw));
+        }
+
+        // Dump the current floor's passage history to /xllog in a paste-friendly block.
+        private void DumpPassageHistory(int deepDungeonId, int floor)
+        {
+            var flight = _flightUsedOnFloor != 0 && floor == _flightUsedOnFloor + 1;
+            var range = DeepDungeonPassage.TryGetKillRange(deepDungeonId, floor, out var lo, out var hi)
+                ? $"{lo}-{hi}" : "n/a";
+            var dungeon = deepDungeonId switch { 1 => "PotD", 2 => "HoH", 3 => "EO", 4 => "PT", _ => $"#{deepDungeonId}" };
+
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"[{Name}] Passage history - {dungeon} floor {floor}, range {range}, flight {flight}");
+            foreach (var (t, kills, raw) in _passageHistory)
+                sb.AppendLine($"  t={t,6:0.0}s  kills={kills,2}  raw={raw,2}");
+            Svc.Log.Info(sb.ToString().TrimEnd());
+        }
+
+        // Scan the object table for enemy NPCs that are dead and tally each one once. Corpses linger
+        // for several seconds before despawning, so observing IsDead across frames reliably catches
+        // every kill. Only runs while the kill counter is enabled to avoid the per-frame scan otherwise.
+        private void TrackKills(InstanceContentDeepDungeon* dd)
+        {
+            // Freeze the count once the beacon has opened so it reflects kills-to-open, not cleanup
+            // kills. The latch is checked before counting (so the kill that opens it is still tallied -
+            // raw flips to >=11 only after that kill registers) and set after, off this frame's raw.
+            if (_passageOpen) return;
+
+            var newKills = 0;
+            foreach (var obj in Svc.Objects)
+            {
+                if (obj is not IBattleNpc npc) continue;
+                // BattleNpcSubKind == 5 is a standard enemy/combatant. Compared by underlying byte
+                // because Dalamud and FFXIVClientStructs disagree on the member name across versions
+                // (Enemy / BattleNpcEnemy / Combatant) while sharing the value.
+                if ((byte)npc.BattleNpcKind != EnemySubKind) continue;
+                if (!npc.IsDead) continue;
+                if (_countedKills.Add(npc.GameObjectId))
+                    newKills++;
+            }
+
+            // Skip the kill burst from a magicite/demiclone summon (detected in chat): it wipes the
+            // floor at once and opens the passage, so those deaths aren't a kills-to-open signal. The
+            // IDs are already marked seen above, so they're never recounted once the window lapses.
+            if ((DateTime.Now - _magiciteUsedAt).TotalSeconds > MagiciteWipeWindowSeconds)
+                _floorKillCount += newKills;
+
+            _passageOpen = dd->PassageProgress >= 11;
+        }
+
+        // The status line sits above the item rows with up to three optional segments drawn
+        // left-to-right: Beacon of Passage progress, the kills-toward-passage counter, and the
+        // dead-reckoned respawn timer. Any can be hidden, and all are suppressed on boss floors
+        // (no passage, no respawns there).
         private void DrawStatusLine(InstanceContentDeepDungeon* dd)
         {
             var boss = DeepDungeonRespawn.IsBossFloor(dd->DeepDungeonId, dd->Floor);
             var showPassage = Config.ShowPassageProgress && !boss;
+            var showKills = Config.ShowKillCounter && !boss;
+            // Debug: raw counter is shown everywhere (boss floors included) for data collection.
+            var showRaw = Config.DebugRawPassage;
 
             var interval = 0;
             var showRespawn = Config.ShowRespawnTimer
                 && DeepDungeonRespawn.TryGetInterval(dd->DeepDungeonId, dd->Floor, out interval);
 
-            if (!showPassage && !showRespawn) return;
+            if (!showPassage && !showKills && !showRespawn && !showRaw) return;
 
-            // Left-to-right segments: passage progress first, then the timer to its right.
-            var segments = new List<(string Text, Vector4? Color)>(2);
+            var open = dd->PassageProgress >= 11;
+
+            // Left-to-right segments: passage progress, raw debug counter, kill counter, then the timer.
+            var segments = new List<(string Text, Vector4? Color)>(4);
 
             if (showPassage)
             {
                 // PassageProgress fills 0-10 as the floor is cleared and reads >=11 once the beacon
                 // is open; surface it as a 0-100% tracker, green once it's open.
-                var raw = dd->PassageProgress;
-                var open = raw >= 11;
-                var pct = open ? 100 : Math.Min((int)raw, 10) * 10;
+                var pct = open ? 100 : Math.Min((int)dd->PassageProgress, 10) * 10;
                 segments.Add(($"Passage  {pct}%", open ? ActiveGreen : (Vector4?)null));
+            }
+
+            if (showRaw)
+            {
+                // The raw PassageProgress byte. It tracks "progress units" (a Flight kill counts as 2)
+                // and snaps to >=11 once the per-floor random threshold is met. The floor's full
+                // history is auto-dumped to /xllog on the next floor change for easy pasting.
+                segments.Add(($"Raw  {dd->PassageProgress}", open ? ActiveGreen : (Vector4?)null));
+            }
+
+            if (showKills)
+            {
+                // The real kill count, shown against the per-floorset range the random open-threshold
+                // is rolled from (the game never reveals the roll - PassageProgress just snaps to open).
+                // Pomander of Flight, spent on the previous floor, makes each kill count double, so the
+                // kills actually needed halve - reflected by halving the displayed range.
+                var flight = _flightUsedOnFloor != 0 && dd->Floor == _flightUsedOnFloor + 1;
+                var killText = $"Kills  {_floorKillCount}";
+                if (!open && DeepDungeonPassage.TryGetKillRange(dd->DeepDungeonId, dd->Floor, out var lo, out var hi))
+                {
+                    if (flight) { lo = (lo + 1) / 2; hi = (hi + 1) / 2; } // ceil(n/2): each kill counts double
+                    killText += $" / {lo}-{hi}";
+                    if (flight) killText += " (Flight)";
+                }
+                segments.Add((killText, open ? ActiveGreen : (Vector4?)null));
             }
 
             if (showRespawn)
