@@ -36,7 +36,9 @@ namespace YABOT.Features.CosmicExploration
             "While enabled, it automatically plays the optimal collectable rotation " +
             "(Scrutiny / Meticulous / Brazen, integrity recovery, then Collect) - ported from " +
             "Ice's Cosmic Exploration, for Cosmic gathering nodes (including planets ICE doesn't support yet). " +
-            "Drive to the node yourself and open it; this only handles the masterpiece minigame.";
+            "Drive to the node yourself and open it; this only handles the masterpiece minigame. " +
+            "Optionally also auto aetherial-reduces (Stellar Reduction) the gathered collectables once the " +
+            "gathering window closes, skipping when there is nothing to reduce.";
 
         public override FeatureType FeatureType => FeatureType.CosmicExploration;
 
@@ -46,6 +48,9 @@ namespace YABOT.Features.CosmicExploration
         {
             [FeatureConfigOption("Start with auto-rotation ON when a collectable window opens")]
             public bool AutoRunByDefault = false;
+
+            [FeatureConfigOption("Auto aetherial reduction after gathering (Stellar Reduction)")]
+            public bool AutoReduce = false;
 
             [FeatureConfigOption("Action delay (ms)", IntMin = 100, IntMax = 2000, EditorSize = 300)]
             public int ActionDelayMs = 300;
@@ -64,6 +69,13 @@ namespace YABOT.Features.CosmicExploration
         // Baseline duty-action charge count captured when a new collectable window opens.
         private uint _buffCount;
         private uint _trackedItemId;
+
+        // Auto aetherial reduction state.
+        private uint _lastCollectableId;
+        private bool _reduceArmed;
+        private int _reduceNoProgress;
+        private int _lastReduceCount = -1;
+        private const int MaxReduceStalls = 10;
 
         public override void Enable()
         {
@@ -157,43 +169,178 @@ namespace YABOT.Features.CosmicExploration
 
         private void RotationTick(IFramework framework)
         {
-            if (!autoRun) return;
-
             try
             {
-                if (!GenericHelpers.TryGetAddonMaster<GatheringMasterpiece>("GatheringMasterpiece", out var collectable)
-                 || !collectable.IsAddonReady)
+                bool masterpieceOpen = GenericHelpers.TryGetAddonMaster<GatheringMasterpiece>("GatheringMasterpiece", out var collectable)
+                                    && collectable.IsAddonReady;
+
+                if (masterpieceOpen)
                 {
-                    // Window closed: reset per-node tracking.
+                    // Remember what we're gathering so it can be reduced once the window closes, and
+                    // arm the reduction pass (reset its per-node tracking).
+                    _lastCollectableId = collectable.ItemID;
+                    if (Config.AutoReduce)
+                    {
+                        _reduceArmed = true;
+                        _reduceNoProgress = 0;
+                        _lastReduceCount = -1;
+                    }
+
+                    // Masterpiece rotation - only when the on-screen toggle is on. Wait out an in-flight
+                    // action animation; do NOT gate on Player.IsBusy (gathering counts as "occupied").
+                    if (autoRun && !Svc.Condition[ConditionFlag.ExecutingGatheringAction])
+                    {
+                        // Capture the baseline duty-action charges when a new collectable item appears.
+                        if (_trackedItemId != collectable.ItemID)
+                        {
+                            _trackedItemId = collectable.ItemID;
+                            _buffCount = CollectStandardCharges();
+                            _lastCollectability = -1;
+                            _lastCollectProgress = DateTime.MinValue;
+                        }
+
+                        if (EzThrottler.Throttle("YABOT_CosmicCollectable", Config.ActionDelayMs))
+                            CollectableGather(collectable);
+                    }
+                }
+                else
+                {
+                    // Masterpiece window closed: reset per-node rotation tracking.
                     _trackedItemId = 0;
                     _lastCollectability = -1;
                     _lastCollectProgress = DateTime.MinValue;
-                    return;
                 }
 
-                // Only wait out an in-flight action animation. Do NOT gate on Player.IsBusy: gathering
-                // itself counts as "occupied", which would block the rotation entirely.
-                if (Svc.Condition[ConditionFlag.ExecutingGatheringAction])
-                    return;
-
-                // Capture the baseline duty-action charges when a new collectable item window appears.
-                if (_trackedItemId != collectable.ItemID)
-                {
-                    _trackedItemId = collectable.ItemID;
-                    _buffCount = CollectStandardCharges();
-                    _lastCollectability = -1;
-                    _lastCollectProgress = DateTime.MinValue;
-                }
-
-                if (!EzThrottler.Throttle("YABOT_CosmicCollectable", Config.ActionDelayMs))
-                    return;
-
-                CollectableGather(collectable);
+                if (Config.AutoReduce)
+                    HandleReduction(masterpieceOpen);
             }
             catch (Exception e)
             {
                 Svc.Log.Error(e, "CosmicCollectableRotation.RotationTick");
             }
+        }
+
+        // Auto aetherial reduction (Stellar Reduction), ported from ICE's Task_Gather reduce flow.
+        // Runs once the gathering node windows are closed; reduces the gathered collectable until none
+        // remain, skipping entirely when there is nothing to reduce.
+        private void HandleReduction(bool masterpieceOpen)
+        {
+            // Wait until both gathering node windows are closed.
+            if (masterpieceOpen || Svc.GameGui.GetAddonByName("Gathering") != IntPtr.Zero)
+                return;
+
+            if (!_reduceArmed)
+                return;
+
+            // Don't act while a reduction animation is in progress.
+            if (Svc.Condition[ConditionFlag.Occupied39])
+                return;
+
+            // Throttle everything below: inventory scans and addon lookups are too expensive to run
+            // every frame for the duration of the reduction pass.
+            if (!EzThrottler.Throttle("YABOT_CosmicReduce", Config.ActionDelayMs))
+                return;
+
+            bool purifyReady = GenericHelpers.TryGetAddonByName<AtkUnitBase>("PurifyItemSelector", out var purify) && purify->IsReady;
+
+            // The mission's score is already locked: the game refuses to reduce. Stop the loop.
+            if (ReductionBlockedError())
+            {
+                Svc.Log.Info("[CosmicReduce] Mission score already received - stopping reduction.");
+                if (purifyReady)
+                    purify->Close(true);
+                _reduceArmed = false;
+                return;
+            }
+
+            int count = CollectableCount(_lastCollectableId);
+
+            if (count <= 0)
+            {
+                // Nothing (left) to reduce - close the reduction window if we opened it, then disarm/skip.
+                if (purifyReady)
+                    purify->Close(true);
+                else
+                    _reduceArmed = false;
+                return;
+            }
+
+            // Skip collectables that can't be aetherially reduced (AetherialReduce == 0).
+            if (!IsReducible(_lastCollectableId))
+            {
+                Svc.Log.Info($"[CosmicReduce] Item {_lastCollectableId} is not reducible; skipping.");
+                if (purifyReady)
+                    purify->Close(true);
+                _reduceArmed = false;
+                return;
+            }
+
+            // Progress/stall tracking covers both opening the window and the reduction itself: if the
+            // count never drops within the budget, give up rather than spinning forever.
+            if (count != _lastReduceCount)
+            {
+                _lastReduceCount = count;
+                _reduceNoProgress = 0;
+            }
+            else if (++_reduceNoProgress >= MaxReduceStalls)
+            {
+                Svc.Log.Info($"[CosmicReduce] Item {_lastCollectableId} did not reduce; giving up.");
+                if (purifyReady)
+                    purify->Close(true);
+                _reduceArmed = false;
+                return;
+            }
+
+            if (purifyReady)
+            {
+                // Reduction window open: reduce the first listed item.
+                ECommons.Automation.Callback.Fire(purify, true, 12, 0);
+            }
+            else
+            {
+                // Open the Aetherial Reduction window (General Action 21).
+                ActionManager.Instance()->UseAction(ActionType.GeneralAction, 21);
+            }
+        }
+
+        private static bool IsReducible(uint itemId)
+        {
+            if (itemId == 0) return false;
+            var row = Svc.Data.GetExcelSheet<Lumina.Excel.Sheets.Item>().GetRowOrDefault(itemId);
+            return row.HasValue && row.Value.AetherialReduce > 0;
+        }
+
+        // The game blocks reduction once the mission score is locked in, showing a red on-screen error
+        // ("Aetherial reduction canceled, you have already received a mission score") via the _TextError
+        // flyout (not the chat log). Returns true when that error is currently displayed.
+        private static bool ReductionBlockedError()
+        {
+            if (!GenericHelpers.TryGetAddonByName<AtkUnitBase>("_TextError", out var te) || te == null || !te->IsVisible)
+                return false;
+
+            for (var i = 0; i < te->UldManager.NodeListCount; i++)
+            {
+                var node = te->UldManager.NodeList[i];
+                if (node == null || node->Type != NodeType.Text)
+                    continue;
+
+                var text = ((AtkTextNode*)node)->NodeText.ToString();
+                if (!string.IsNullOrEmpty(text) && text.Contains("mission score", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static int CollectableCount(uint itemId)
+        {
+            if (itemId == 0) return 0;
+            var im = InventoryManager.Instance();
+            if (im == null) return 0;
+            // Cosmic collectables live in the collectables inventory at itemId + 500000. Collectables are
+            // never equipped or in the armoury, so skip those scans (checkEquipped/checkArmory = false).
+            return im->GetInventoryItemCount(itemId + 500_000, false, false, false)
+                 + im->GetInventoryItemCount(itemId, false, false, false);
         }
 
         // Ported verbatim from ICE's Task_Gather.CollectableGather, minus mission/quantity logic.
