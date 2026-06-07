@@ -190,7 +190,9 @@ namespace YABOT.Features.UI
                                     || (r.Info.HelpMessage ?? string.Empty).Contains(filterText, StringComparison.OrdinalIgnoreCase)
                                     || r.Assembly.Contains(filterText, StringComparison.OrdinalIgnoreCase));
 
-                if (parent.Config.FavouritesOnly)
+                // "★ only" restricts the default view, but an active search looks across everything -
+                // otherwise you couldn't find a non-favourited command without first toggling it off.
+                if (parent.Config.FavouritesOnly && string.IsNullOrEmpty(filterText))
                     commandQuery = commandQuery.Where(r => parent.Config.Favourites.Contains(r.Command));
 
                 var commandRows = commandQuery
