@@ -5,6 +5,7 @@ using Dalamud.Plugin.Services;
 using ECommons.DalamudServices;
 using ECommons.GameHelpers;
 using FFXIVClientStructs.FFXIV.Client.Game.Event;
+using FFXIVClientStructs.FFXIV.Component.GUI;
 using YABOT.FeaturesSetup;
 using YABOT.UI;
 using System;
@@ -36,7 +37,6 @@ namespace YABOT.Features.DeepDungeons
             public bool ShowSilver = true;
             public bool ShowGold = true;
             public bool ShowPassage = true;
-            public float MaxRange = 100f;
             public int MaxPaths = 8;
             public int Thickness = 4;
             public int Opacity = 90;
@@ -90,15 +90,23 @@ namespace YABOT.Features.DeepDungeons
             public float Length = -1f; // total walked path length (yalms); -1 = none yet
         }
 
+        // Coffers are cached by object id and kept until the floor changes, so the path survives the
+        // coffer unloading from the object table when you move away.
         private readonly Dictionary<ulong, ChestPath> _paths = new();
-        private ChestPath? _passage; // path to the beacon of passage (always shown)
+        private ChestPath? _passage; // path to the beacon of passage
+        private readonly HashSet<(int, int, int)> _passageSpots = new(); // distinct beacon positions this floor
+        private bool _passageTrap; // multiple beacons seen -> trap floor, ignore the passage
         private DateTime _lastScan = DateTime.MinValue;
+        private (byte Dd, int Floor) _floorKey = (255, -1);
 
         // Recompute a path when the player has drifted this far from where it was last computed.
         private const float RecomputeMove = 3f;
 
         // Coffers this close (in walk time) are hidden and stop being recomputed - you're basically there.
         private const float MinEtaSeconds = 6f;
+
+        // A cached coffer that vanishes from the object table while we're this close was opened -> drop it.
+        private const float OpenedDistance = 5f;
 
         public override void Enable()
         {
@@ -107,6 +115,7 @@ namespace YABOT.Features.DeepDungeons
             _navPathfind = Svc.PluginInterface.GetIpcSubscriber<Vector3, Vector3, bool, Task<List<Vector3>>>("vnavmesh.Nav.Pathfind");
             Overlay = new(this);
             Svc.Framework.Update += OnUpdate;
+            Svc.ClientState.TerritoryChanged += OnTerritoryChanged;
             base.Enable();
         }
 
@@ -114,7 +123,8 @@ namespace YABOT.Features.DeepDungeons
         {
             SaveConfig(Config);
             Svc.Framework.Update -= OnUpdate;
-            _paths.Clear();
+            Svc.ClientState.TerritoryChanged -= OnTerritoryChanged;
+            ClearAll();
             if (Overlay != null)
             {
                 P.Ws.RemoveWindow(Overlay);
@@ -122,6 +132,9 @@ namespace YABOT.Features.DeepDungeons
             }
             base.Disable();
         }
+
+        // Every deep-dungeon floor transition reloads the zone - the most reliable reset signal.
+        private void OnTerritoryChanged(uint territory) => ClearAll();
 
         private bool InDeepDungeon() => EventFramework.Instance()->GetInstanceContentDeepDungeon() != null;
 
@@ -154,6 +167,11 @@ namespace YABOT.Features.DeepDungeons
 
         private static bool InCombat => Svc.Condition[ConditionFlag.InCombat];
 
+        // Zoning / loading screen - the navmesh is rebuilding and our position is in flux, so paths are
+        // garbage; pause both computation and drawing until the load finishes.
+        private static bool IsLoading =>
+            Svc.Condition[ConditionFlag.BetweenAreas] || Svc.Condition[ConditionFlag.BetweenAreas51];
+
         private static float PathLength(List<Vector3> p)
         {
             var len = 0f;
@@ -182,78 +200,145 @@ namespace YABOT.Features.DeepDungeons
             }
         }
 
-        // Rescan nearby coffers + the passage a few times a second and (re)request paths for them.
+        // The nearest enabled cached coffers (capped) - shared by pathfinding and drawing.
+        private IEnumerable<ChestPath> SelectVisible(Vector3 from) =>
+            _paths.Values
+                .Where(c => TierEnabled(c.Tier))
+                .OrderBy(c => Vector3.DistanceSquared(c.Target, from))
+                .Take(Math.Max(1, Config.MaxPaths));
+
+        // Discover coffers + the passage and (re)request paths a few times a second.
         private void OnUpdate(IFramework framework)
         {
             try
             {
-                if (Player.Object is not { } player || !InDeepDungeon())
+                if (IsLoading) return; // wait for the load to finish (cache is reset on floor/territory change)
+
+                if (Player.Object is not { } player)
                 {
-                    if (_paths.Count > 0) _paths.Clear();
-                    _passage = null;
+                    ClearAll();
+                    return;
+                }
+                var dd = EventFramework.Instance()->GetInstanceContentDeepDungeon();
+                if (dd == null)
+                {
+                    ClearAll();
                     return;
                 }
                 if (!NavReady()) return;
+
+                // Wipe the cache on a floor change. The authoritative floor number is the "Floor N" text
+                // on the DeepDungeonMap addon (how NecroLens reads it); fall back to dd->Floor if the map
+                // addon isn't available.
+                var floor = ReadFloorNumber();
+                if (floor < 0) floor = dd->Floor;
+                var key = (dd->DeepDungeonId, floor);
+                if (key != _floorKey)
+                {
+                    _floorKey = key;
+                    ClearAll();
+                }
 
                 var now = DateTime.Now;
                 if ((now - _lastScan).TotalSeconds < 0.5) return;
                 _lastScan = now;
 
-                // Nothing is pathed or drawn in combat.
-                if (InCombat) { _paths.Clear(); _passage = null; return; }
+                if (InCombat) return; // keep the cache, but don't compute or draw in combat
 
                 var pp = player.Position;
 
-                // Beacon of passage - pathed independent of range / ETA cutoff (but not in combat).
+                // Cache every coffer we can see (all tiers; tier visibility is applied at draw time).
+                var present = new HashSet<ulong>();
+                foreach (var o in Svc.Objects)
+                {
+                    var tier = ClassifyChest(o.DataId);
+                    if (tier == null) continue;
+                    var id = o.GameObjectId;
+                    present.Add(id);
+                    if (!_paths.TryGetValue(id, out var cp))
+                        _paths[id] = cp = new ChestPath { Tier = tier.Value };
+                    cp.Tier = tier.Value;
+                    cp.Target = o.Position;
+                }
+
+                // A cached coffer gone from the table while we're right next to it was opened -> drop it.
+                foreach (var (id, cp) in _paths.Where(kv => !present.Contains(kv.Key)).ToList())
+                    if (Vector3.Distance(pp, cp.Target) < OpenedDistance)
+                        _paths.Remove(id);
+
+                // Beacon of passage - cached the same way (kept until the floor changes). If more than one
+                // distinct beacon shows up on a floor it's a trap floor, so we ignore the passage entirely.
                 if (Config.ShowPassage)
                 {
-                    var beacon = Svc.Objects.FirstOrDefault(o => PassageDataIds.Contains(o.DataId));
-                    if (beacon != null)
+                    foreach (var b in Svc.Objects.Where(o => PassageDataIds.Contains(o.DataId)))
+                        _passageSpots.Add(((int)Math.Round(b.Position.X), (int)Math.Round(b.Position.Y), (int)Math.Round(b.Position.Z)));
+
+                    if (_passageSpots.Count > 1)
                     {
-                        _passage ??= new ChestPath();
-                        _passage.Target = beacon.Position;
-                        Promote(_passage);
-                        MaybePathfind(_passage, pp);
+                        _passageTrap = true;
+                        _passage = null;
                     }
-                    else _passage = null;
+                    else if (!_passageTrap)
+                    {
+                        var beacon = Svc.Objects.FirstOrDefault(o => PassageDataIds.Contains(o.DataId));
+                        if (beacon != null)
+                        {
+                            _passage ??= new ChestPath();
+                            _passage.Target = beacon.Position;
+                        }
+                        if (_passage != null) MaybePathfind(_passage, pp);
+                    }
                 }
                 else _passage = null;
 
-                var coffers = Svc.Objects
-                    .Select(o => (o, tier: ClassifyChest(o.DataId)))
-                    .Where(x => x.tier != null && TierEnabled(x.tier.Value))
-                    .Select(x => (x.o.GameObjectId, x.tier!.Value, x.o.Position, dist: Vector3.Distance(x.o.Position, pp)))
-                    .Where(x => x.dist <= Config.MaxRange)
-                    .OrderBy(x => x.dist)
-                    .Take(Math.Max(1, Config.MaxPaths))
-                    .ToList();
-
-                var present = new HashSet<ulong>();
-                foreach (var (id, tier, pos, _) in coffers)
+                // (Re)path the nearest enabled coffers, skipping ones under the ETA cutoff.
+                foreach (var cp in SelectVisible(pp))
                 {
-                    present.Add(id);
-                    if (!_paths.TryGetValue(id, out var cp))
-                    {
-                        cp = new ChestPath { Tier = tier };
-                        _paths[id] = cp;
-                    }
-                    cp.Tier = tier;
-                    cp.Target = pos;
                     Promote(cp);
-
-                    // Too close (under the ETA cutoff) -> stop recomputing; Draw also hides it.
                     if (cp.Path != null && cp.Length >= 0 && cp.Length / Config.WalkSpeed < MinEtaSeconds)
                         continue;
                     MaybePathfind(cp, pp);
                 }
-
-                foreach (var k in _paths.Keys.Where(k => !present.Contains(k)).ToList())
-                    _paths.Remove(k);
             }
             catch (Exception ex)
             {
                 Svc.Log.Error(ex, $"[{Name}] update failed");
             }
+        }
+
+        // Reads the absolute floor number from the "Floor N" text on the DeepDungeonMap addon
+        // (node #26 -> child -> prev sibling text node), the same source NecroLens uses. -1 if unavailable.
+        private static int ReadFloorNumber()
+        {
+            try
+            {
+                var ptr = Svc.GameGui.GetAddonByName("DeepDungeonMap");
+                if (ptr == IntPtr.Zero) return -1;
+                var addon = (AtkUnitBase*)ptr.Address;
+                if (addon == null || !addon->IsVisible) return -1;
+                var n26 = addon->UldManager.SearchNodeById(26);
+                var textNode = n26 != null && n26->ChildNode != null ? n26->ChildNode->PrevSiblingNode : null;
+                var tn = textNode != null ? textNode->GetAsAtkTextNode() : null;
+                if (tn == null) return -1;
+
+                var s = tn->NodeText.ToString();
+                int num = 0; var found = false;
+                foreach (var c in s)
+                {
+                    if (c is >= '0' and <= '9') { num = num * 10 + (c - '0'); found = true; }
+                    else if (found) break;
+                }
+                return found ? num : -1;
+            }
+            catch { return -1; }
+        }
+
+        private void ClearAll()
+        {
+            if (_paths.Count > 0) _paths.Clear();
+            _passage = null;
+            _passageSpots.Clear();
+            _passageTrap = false;
         }
 
         public override bool DrawConditions() => Player.Object != null && InDeepDungeon();
@@ -262,20 +347,22 @@ namespace YABOT.Features.DeepDungeons
         {
             try
             {
-                if (InCombat) return; // everything hidden in combat
+                if (IsLoading || InCombat) return; // everything hidden while zoning or in combat
 
                 var alpha = Math.Clamp(Config.Opacity / 100f, 0.2f, 1f);
                 var drawList = ImGui.GetForegroundDrawList();
 
                 // Passage line - teal, animated flow toward the stairs.
-                if (Config.ShowPassage && _passage?.Path is { Count: > 0 })
+                if (Config.ShowPassage && _passage != null)
                 {
                     Promote(_passage);
-                    DrawPath(drawList, _passage.Path!, ImGui.GetColorU32(new Vector4(PassageRgb, alpha)), _passage.Length, Config.Thickness, dotted: false, animPxPerSec: 60f);
+                    if (_passage.Path is { Count: > 0 })
+                        DrawPath(drawList, _passage.Path, ImGui.GetColorU32(new Vector4(PassageRgb, alpha)), _passage.Length, Config.Thickness, dotted: false, animPxPerSec: 60f);
                 }
 
                 var chestThickness = Math.Max(1f, Config.Thickness * 0.5f);
-                foreach (var cp in _paths.Values)
+                var pp = Player.Object?.Position ?? Vector3.Zero;
+                foreach (var cp in SelectVisible(pp))
                 {
                     Promote(cp);
                     var path = cp.Path;
@@ -368,8 +455,6 @@ namespace YABOT.Features.DeepDungeons
             if (ImGui.Checkbox("Gold coffers", ref Config.ShowGold)) hasChanged = true;
             if (ImGui.Checkbox("Beacon of passage (teal, always shown)", ref Config.ShowPassage)) hasChanged = true;
 
-            ImGui.SetNextItemWidth(200);
-            if (ImGui.SliderFloat("Max range (yalms)", ref Config.MaxRange, 20f, 200f, "%.0f")) hasChanged = true;
             ImGui.SetNextItemWidth(200);
             if (ImGui.SliderInt("Max paths", ref Config.MaxPaths, 1, 16)) hasChanged = true;
             ImGui.SetNextItemWidth(200);
