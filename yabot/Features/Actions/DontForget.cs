@@ -92,6 +92,10 @@ namespace YABOT.Features.Actions
             base.Disable();
         }
 
+        // Zoning / loading screen - statuses and action availability are in flux, so don't act yet.
+        private static bool IsLoading =>
+            Svc.Condition[ConditionFlag.BetweenAreas] || Svc.Condition[ConditionFlag.BetweenAreas51];
+
         private static bool IsInGPose()
         {
             if (Svc.ClientState.IsGPosing) return true;
@@ -105,6 +109,7 @@ namespace YABOT.Features.Actions
             try
             {
                 if (IsInGPose()) return;
+                if (IsLoading) return; // don't auto-fire anything while zoning (statuses/actions in flux)
 
                 var player = Svc.Objects.LocalPlayer;
                 if (player == null) return;
@@ -196,7 +201,7 @@ namespace YABOT.Features.Actions
                             am->UseAction(ActionType.Action, SummonCarbuncle);
                     }
 
-                    // Auto tank stance, with 2-second cooldown to prevent runaway recasts
+                    // Auto tank stance, with 2-second cooldown to prevent runaway recasts.
                     if (Config.TankStance && (DateTime.Now - lastTankStanceAction).TotalSeconds >= 2)
                     {
                         var statuses = player.StatusList;
