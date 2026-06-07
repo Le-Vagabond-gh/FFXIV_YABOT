@@ -54,17 +54,35 @@ namespace YABOT.Features.DeepDungeons
 
         // Both regen potions grant "Rehabilitation" for 30s. The status sheet reuses that name across
         // many potency tiers (different ids per item level), so we gate on the name rather than a
-        // single id - and pair it with a 30s use-debounce as a locale-proof fallback that also avoids
-        // re-drinking over a manual one.
-        private const double RegenBuffSeconds = 30.0;
+        // single id - that gate alone keeps us from re-drinking the regen while it's already ticking.
         private const string RehabilitationStatus = "Rehabilitation";
 
-        // Short anti-double-fire window: GetActionStatus keeps reading 0 for a frame or two after
-        // UseAction before the recast registers, so without this we could fire twice in that gap.
+        // Anti-double-fire window for the regen *ability* (long-cooldown oGCD, no inventory to watch).
         private const double AttemptDebounce = 2.0;
 
-        private DateTime _lastHpPotUse = DateTime.MinValue;
-        private DateTime _lastRegenPotUse = DateTime.MinValue;
+        // Potions are fired insistently: we re-attempt every frame until the item actually goes on
+        // recast (GetActionStatus != 0), which is the only solid proof the drink landed - UseAction can
+        // return true and still be silently dropped ("it can not go through sometimes"), so we never
+        // trust its return. The one thing we guard against is the 1-2 frame gap where the recast hasn't
+        // registered yet: if our fire already dropped the inventory count we hold off for this short
+        // window so we don't chug a second potion in that gap, then resume hammering if nothing landed.
+        private const double PotionRetryGrace = 0.5;
+
+        // Potions can be High Quality (the ones you stockpile/loot often are). The item and action APIs
+        // address an HQ item as id + 1,000,000; ask for the plain NQ id while you only hold HQ and the
+        // game answers "you do not have that item" (LogMessage 583) - which is exactly what we observed
+        // for the HQ Super-Potion. So we resolve the quality we actually carry before using.
+        private const uint HqOffset = 1_000_000;
+
+        // Per-item in-flight tracking for the insistent retry above.
+        private struct ItemUse
+        {
+            public int CountAtUse;   // inventory count when we last fired (0 = nothing in flight)
+            public DateTime FiredAt;
+        }
+
+        private ItemUse _hpPot;
+        private ItemUse _regenPot;
         private DateTime _lastAbilityUse = DateTime.MinValue;
 
         public override void Enable()
@@ -99,13 +117,12 @@ namespace YABOT.Features.DeepDungeons
 
                 // HP potion under the low threshold (independent item, fires regardless of combat).
                 if (Config.UseHpPotion && pots.HasValue && hpPct < Config.HpPotionThreshold)
-                    TryUseItem(am, pots.Value.Heal, ref _lastHpPotUse, AttemptDebounce, now);
+                    TryUseItem(am, pots.Value.Heal, ref _hpPot, now);
 
                 // Regen potion under the higher threshold, unless Rehabilitation is already ticking.
                 if (Config.UseRegenPotion && pots.HasValue && hpPct < Config.RegenPotionThreshold
-                    && (now - _lastRegenPotUse).TotalSeconds >= RegenBuffSeconds
                     && !PlayerHasStatusNamed(player, RehabilitationStatus))
-                    TryUseItem(am, pots.Value.Regen, ref _lastRegenPotUse, RegenBuffSeconds, now);
+                    TryUseItem(am, pots.Value.Regen, ref _regenPot, now);
 
                 // Self-regen ability: keep it up while in combat (so charges aren't burned exploring).
                 if (Config.UseRegenAbility && Svc.Condition[ConditionFlag.InCombat])
@@ -124,18 +141,41 @@ namespace YABOT.Features.DeepDungeons
             _ => null,
         };
 
-        // Fire an item if it's usable right now and we're past our debounce. GetActionStatus == 0
-        // means the game *should* accept it, but it can still reject the use (e.g. mid-GCD /
-        // animation lock); UseAction returns false in that case. We only stamp the debounce timer on
-        // an accepted use - a rejection leaves it untouched so we re-attempt next frame instead of
-        // locking ourselves out for the whole debounce window while still under threshold.
-        private static void TryUseItem(ActionManager* am, uint itemId, ref DateTime lastUse, double debounce, DateTime now)
+        // Drink an item, retrying every frame until it actually goes on recast. UseAction can return
+        // true while the use is silently dropped, so the only signals we trust are GetActionStatus
+        // flipping to non-zero (on recast = it landed) and the inventory count dropping. Everything
+        // else just means "keep trying".
+        private static void TryUseItem(ActionManager* am, uint itemId, ref ItemUse use, DateTime now)
         {
-            if ((now - lastUse).TotalSeconds < debounce) return;
-            if (am->GetActionStatus(ActionType.Item, itemId) != 0) return;
+            var inv = InventoryManager.Instance();
+            if (inv == null) return;
 
-            if (am->UseAction(ActionType.Item, itemId, 0xE0000000, 0xFFFF))
-                lastUse = now;
+            // Resolve the quality we actually carry. Prefer NQ; fall back to HQ (addressed as id + 1M).
+            // GetInventoryItemCount counts a single quality, so we have to ask for each.
+            var nq = inv->GetInventoryItemCount(itemId, false);
+            var hq = inv->GetInventoryItemCount(itemId, true);
+            var useId = nq > 0 ? itemId : (hq > 0 ? itemId + HqOffset : 0);
+            var count = nq > 0 ? nq : hq;
+            if (useId == 0) return; // none in inventory - nothing to drink
+
+            // On recast -> the drink landed. Reset and stop until the item is usable again.
+            if (am->GetActionStatus(ActionType.Item, useId) != 0) { use.CountAtUse = 0; return; }
+
+            // Our fire already dropped the count -> it landed; the recast just hasn't registered this
+            // frame yet. Don't chug a second one in that gap.
+            if (use.CountAtUse > 0 && count < use.CountAtUse) { use.CountAtUse = 0; return; }
+
+            // Just fired and nothing has landed yet: give the queued use a brief moment to resolve so a
+            // single use doesn't become two drinks. Past that with no count drop, it was dropped - retry.
+            if (use.CountAtUse > 0 && (now - use.FiredAt).TotalSeconds < PotionRetryGrace) return;
+
+            // Be insistent: fire (again) until it goes on recast. We only record the fire so the guards
+            // above can run - we never treat the boolean as proof it worked.
+            if (am->UseAction(ActionType.Item, useId, 0xE0000000, 0xFFFF))
+            {
+                use.CountAtUse = count;
+                use.FiredAt = now;
+            }
         }
 
         private void TryUseRegenAbility(ActionManager* am, Dalamud.Game.ClientState.Objects.SubKinds.IPlayerCharacter player, DateTime now)
