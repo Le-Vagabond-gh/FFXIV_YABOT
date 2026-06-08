@@ -97,6 +97,10 @@ namespace YABOT.Features.DeepDungeons
         private int _floorKillCount;
         private const byte EnemySubKind = 5; // BattleNpcSubKind value for a standard enemy/combatant
 
+        // Each pomander type caps at 3 in the carry inventory; the count turns blue once it's full
+        // so the player can spot one to spend before the next coffer. Magicite shows no count.
+        private const byte PomanderMaxCount = 3;
+
         // Latched once the beacon opens (raw >= 11) so the kill count freezes at the kills-to-open
         // value instead of ticking up on cleanup kills. Reset on floor change.
         private bool _passageOpen;
@@ -753,10 +757,17 @@ namespace YABOT.Features.DeepDungeons
             // GetFontSize reflects the SetWindowFontScale already pushed in Draw, so icons
             // track the configured scale via font size alone.
             var iconSize = ImGui.GetFontSize() * 1.6f;
-            var qty = showCount ? $"   x{count}" : string.Empty;
-            var label = Config.HideName
-                ? (string.IsNullOrEmpty(desc) ? qty.TrimStart() : $"{desc}{qty}")
-                : (string.IsNullOrEmpty(desc) ? $"{name}{qty}" : $"{name} - {desc}{qty}");
+
+            // The trailing count is split off from the rest of the label so it can be tinted blue
+            // at the carry cap while name/effect keep their normal color.
+            var countText = showCount ? $"   x{count}" : string.Empty;
+            var baseLabel = Config.HideName
+                ? (string.IsNullOrEmpty(desc) ? string.Empty : desc)
+                : (string.IsNullOrEmpty(desc) ? name : $"{name} - {desc}");
+            // Nothing for the clickable selectable to anchor to (name hidden, no effect blurb): fold
+            // the count back in so the row stays clickable - it just won't get the blue max tint.
+            if (string.IsNullOrEmpty(baseLabel)) { baseLabel = countText.TrimStart(); countText = string.Empty; }
+
             // rowKey uniquely identifies the row (display name isn't unique - duplicate magicite
             // share a name across slots), so the selectable ID, ImGui ID and flash lookup all key
             // off it to keep rows that share text from colliding.
@@ -770,11 +781,13 @@ namespace YABOT.Features.DeepDungeons
             var flashing = TryGetFlashColor(rowKey, out var flashColor, out var bounce, out var kind);
             var color = flashing ? flashColor : (isActive ? ActiveGreen : (Vector4?)null);
             var arrowIcon = kind == FlashKind.Capped ? CappedArrowIconId : FlashArrowIconId;
+            // Count rides the row color normally, but turns blue once it hits the carry cap.
+            var countColor = showCount && count >= PomanderMaxCount ? FlashBlue : color;
 
             if (Config.RightAlign)
-                DrawRowRightAligned(iconId, iconSize, label, hiddenId, color, flashing, bounce, arrowIcon, onClick);
+                DrawRowRightAligned(iconId, iconSize, baseLabel, countText, hiddenId, color, countColor, flashing, bounce, arrowIcon, onClick);
             else
-                DrawRowLeftAligned(iconId, iconSize, label, hiddenId, color, flashing, bounce, arrowIcon, onClick);
+                DrawRowLeftAligned(iconId, iconSize, baseLabel, countText, hiddenId, color, countColor, flashing, bounce, arrowIcon, onClick);
 
             // Tooltip surfaces the canonical name when it's hidden, and the active-on-floor
             // marker either way. Combined into one tooltip so they don't fight for the hover.
@@ -790,7 +803,7 @@ namespace YABOT.Features.DeepDungeons
             ImGui.PopID();
         }
 
-        private void DrawRowLeftAligned(uint iconId, float iconSize, string label, string id, Vector4? color, bool flashing, float bounce, uint arrowIcon, System.Action onClick)
+        private void DrawRowLeftAligned(uint iconId, float iconSize, string baseLabel, string countText, string id, Vector4? color, Vector4? countColor, bool flashing, float bounce, uint arrowIcon, System.Action onClick)
         {
             var startY = ImGui.GetCursorPosY();
             if (flashing)
@@ -803,18 +816,20 @@ namespace YABOT.Features.DeepDungeons
             if (textOffsetY > 0)
                 ImGui.SetCursorPosY(startY + textOffsetY);
 
-            DrawSelectable(label + id, 0f, iconSize, color, onClick);
+            DrawSelectable(baseLabel + id, 0f, iconSize, color, onClick);
+            DrawCountSegment(countText, countColor);
         }
 
-        private void DrawRowRightAligned(uint iconId, float iconSize, string label, string id, Vector4? color, bool flashing, float bounce, uint arrowIcon, System.Action onClick)
+        private void DrawRowRightAligned(uint iconId, float iconSize, string baseLabel, string countText, string id, Vector4? color, Vector4? countColor, bool flashing, float bounce, uint arrowIcon, System.Action onClick)
         {
             // Push the row to the right edge of the auto-resized window. ContentRegionAvail is
             // the widest row's width (set by previous frames in AlwaysAutoResize windows), so
             // shorter rows still settle next to the right edge across frames.
             var gap = ImGui.GetStyle().ItemSpacing.X;
-            var labelWidth = ImGui.CalcTextSize(label).X + ImGui.GetStyle().FramePadding.X * 2f;
+            var labelWidth = ImGui.CalcTextSize(baseLabel).X + ImGui.GetStyle().FramePadding.X * 2f;
+            var countWidth = string.IsNullOrEmpty(countText) ? 0f : ImGui.CalcTextSize(countText).X;
             var arrowWidth = flashing ? FlashArrowWidth(iconSize) + gap : 0f;
-            var totalWidth = arrowWidth + labelWidth + gap + iconSize;
+            var totalWidth = arrowWidth + labelWidth + countWidth + gap + iconSize;
             var avail = ImGui.GetContentRegionAvail().X;
             if (avail > totalWidth)
                 ImGui.SetCursorPosX(ImGui.GetCursorPosX() + avail - totalWidth);
@@ -827,7 +842,8 @@ namespace YABOT.Features.DeepDungeons
             if (textOffsetY > 0)
                 ImGui.SetCursorPosY(startY + textOffsetY);
 
-            DrawSelectable(label + id, labelWidth, iconSize, color, onClick);
+            DrawSelectable(baseLabel + id, labelWidth, iconSize, color, onClick);
+            DrawCountSegment(countText, countColor);
 
             ImGui.SameLine();
             ImGui.SetCursorPosY(startY);
@@ -855,6 +871,18 @@ namespace YABOT.Features.DeepDungeons
 
             if (color.HasValue)
                 ImGui.PopStyleColor();
+        }
+
+        // Draws the trailing "xN" count right after a row's label, tinted independently (blue at the
+        // carry cap) so the name/effect can keep their own color. The leading spaces in countText
+        // give the gap, so this sits flush against the selectable.
+        private static void DrawCountSegment(string countText, Vector4? color)
+        {
+            if (string.IsNullOrEmpty(countText)) return;
+            ImGui.SameLine(0, 0);
+            if (color.HasValue) ImGui.PushStyleColor(ImGuiCol.Text, color.Value);
+            ImGui.TextUnformatted(countText);
+            if (color.HasValue) ImGui.PopStyleColor();
         }
 
         // Resolves a row's text color: a transient blue<->white pulse right after pickup, otherwise
