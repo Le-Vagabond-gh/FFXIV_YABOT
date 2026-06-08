@@ -39,6 +39,7 @@ namespace YABOT.Features.UI
             public bool HideYabot = false;
             public bool FavouritesOnly = false;
             public bool ShowDescription = true;
+            public bool AutoFocusFilter = true;
         }
 
         public Configs Config { get; private set; } = null!;
@@ -240,6 +241,11 @@ namespace YABOT.Features.UI
                 var filterWidth = Math.Max(120f, available - clearWidth - favWidth - descWidth - style.ItemSpacing.X * 3f);
 
                 ImGui.SetNextItemWidth(filterWidth);
+                // Grab keyboard focus on the frames the window is appearing so you can type straight
+                // away. Only while appearing - never on later frames - so a click elsewhere in the
+                // palette isn't yanked back to the box, and closing the window drops it entirely.
+                if (parent.Config.AutoFocusFilter && appearingFrames > 0)
+                    ImGui.SetKeyboardFocusHere();
                 ImGui.InputTextWithHint("##filter", "Filter commands, plugins, shortcuts or descriptions...", ref filterText, 256);
 
                 ImGui.SameLine(0, style.ItemInnerSpacing.X);
@@ -493,6 +499,9 @@ namespace YABOT.Features.UI
 
                 if (ImGui.Checkbox("Hide commands flagged ShowInHelp=false", ref cfg.HideHelpHidden)) changed = true;
                 if (ImGui.Checkbox("Hide YABOT's own commands", ref cfg.HideYabot)) changed = true;
+                if (ImGui.Checkbox("Auto-focus the search box when the palette opens", ref cfg.AutoFocusFilter)) changed = true;
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip("Start typing to filter the moment the dropdown opens, without clicking the box first.");
 
                 ImGui.Spacing();
                 ImGui.Separator();

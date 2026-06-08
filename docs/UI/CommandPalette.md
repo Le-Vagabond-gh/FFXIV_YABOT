@@ -27,6 +27,7 @@ Sub-commands like `/li w` (world change) are parsed by the game or the owning pl
 
 - **Hide commands flagged `ShowInHelp=false`** - many plugins register hidden debug / internal commands. On by default.
 - **Hide YABOT's own commands** - off by default.
+- **Auto-focus the search box when the palette opens** - on by default. The filter box grabs keyboard focus as the dropdown appears, so you can type to filter without clicking it first. Focus is dropped when the palette closes.
 
 ## Caveats
 
