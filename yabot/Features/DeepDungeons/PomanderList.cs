@@ -4,6 +4,7 @@ using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Interface.Utility;
 using ECommons.DalamudServices;
 using ECommons.ImGuiMethods;
+using FFXIVClientStructs.FFXIV.Client.Game.Control;
 using FFXIVClientStructs.FFXIV.Client.Game.Event;
 using FFXIVClientStructs.FFXIV.Client.Game.InstanceContent;
 using Lumina.Excel.Sheets;
@@ -11,8 +12,10 @@ using YABOT.FeaturesSetup;
 using YABOT.UI;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.ComponentModel;
 using System.Numerics;
+using CSGameObject = FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject;
 
 namespace YABOT.Features.DeepDungeons
 {
@@ -63,6 +66,13 @@ namespace YABOT.Features.DeepDungeons
 
             [FeatureConfigOption("When a coffer holds a pomander you're already at max on:", "RadioEnum")]
             public CappedAction CappedPomanderAction = CappedAction.Off;
+
+            // Only meaningful (and only shown) in Prompt mode - see ShouldShow below. The name sorts
+            // it right beneath the radio above.
+            [FeatureConfigOption("When you confirm, re-open the coffer you just tried", ConditionalDisplay = true)]
+            public bool ReopenCofferAfterUse = false;
+
+            public bool ShouldShowReopenCofferAfterUse() => CappedPomanderAction == CappedAction.Prompt;
         }
 
         // What to do when a coffer can't be picked up because we're capped on that pomander.
@@ -132,12 +142,31 @@ namespace YABOT.Features.DeepDungeons
         private DateTime _primeUntil = DateTime.MinValue;
         private const double PrimeGraceSeconds = 3.0;
 
+        // When a slot's count last hit zero. Using the last of a pomander empties the slot a beat
+        // before its active-effect flag comes up, so the row would vanish then snap back - shifting
+        // everything below it right under the cursor. Hold an emptied row in place briefly to bridge
+        // that gap (it stays for good if the effect does light up, else falls off after the linger).
+        private readonly DateTime[] _slotEmptiedAt = new DateTime[16];
+        private const double EmptyLingerSeconds = 2.0;
+
         // Pending "use a capped pomander?" prompt (Prompt mode). Holds the slot to use, the name to
         // show, and an auto-dismiss time so a stale prompt doesn't linger.
         private uint? _promptSlot;
         private string _promptName = string.Empty;
         private DateTime _promptExpiry;
         private const double PromptTimeoutSeconds = 15.0;
+
+        // ReopenCofferAfterUse: the coffer we bounced off of (captured when the prompt was armed, while
+        // we're still standing on it). After Yes uses the pomander we re-open it insistently - target
+        // then interact a few times a second, mirroring the potion retry - until it opens (vanishes
+        // from the object table) or we give up. Coffer id is captured at arm time so a stale target or
+        // a slight step doesn't lose it.
+        private ulong _promptChestId;
+        private ulong _reopenChestId;
+        private DateTime _reopenDeadline;
+        private DateTime _reopenLastTry = DateTime.MinValue;
+        private const double ReopenTimeoutSeconds = 6.0;
+        private const double ReopenTryThrottleSeconds = 0.2;
 
         // Pickup = green arrows when a count went up; Capped = blue arrows when the game told us we
         // can't carry any more of that item (returned to the coffer), hinting to use one first.
@@ -235,6 +264,9 @@ namespace YABOT.Features.DeepDungeons
                         _promptSlot = (uint)slot;
                         _promptName = shortName;
                         _promptExpiry = DateTime.Now.AddSeconds(PromptTimeoutSeconds);
+                        // We're standing on the coffer right now, so the nearest one is the one we
+                        // just tried. Capture it so a Yes can re-open it even if we drift a little.
+                        _promptChestId = Config.ReopenCofferAfterUse ? FindNearestChestId() : 0;
                         break;
                 }
             }
@@ -380,6 +412,7 @@ namespace YABOT.Features.DeepDungeons
                 ImGui.PopStyleColor();
 
                 DrawCappedPrompt(dd);
+                TickReopenCoffer();
             }
             catch (Exception ex)
             {
@@ -413,6 +446,12 @@ namespace YABOT.Features.DeepDungeons
                 {
                     try { dd->UsePomander(slot); }
                     catch (Exception ex) { Svc.Log.Error(ex, $"[{Name}] prompt use failed"); }
+                    // Now that a slot is free, re-open the coffer we bounced off of (insistently).
+                    if (Config.ReopenCofferAfterUse && _promptChestId != 0)
+                    {
+                        _reopenChestId = _promptChestId;
+                        _reopenDeadline = DateTime.Now.AddSeconds(ReopenTimeoutSeconds);
+                    }
                     _promptSlot = null;
                 }
                 ImGui.SameLine();
@@ -422,6 +461,52 @@ namespace YABOT.Features.DeepDungeons
             ImGui.End();
 
             ImGui.PopStyleVar();
+        }
+
+        // The nearest deep-dungeon coffer to the player, by GameObjectId (0 if none in range). Called
+        // when arming the prompt, so it resolves the coffer we just tried to open.
+        private static ulong FindNearestChestId()
+        {
+            if (Svc.Objects.LocalPlayer is not { } player) return 0;
+            var pos = player.Position;
+            ulong best = 0;
+            var bestDist = float.MaxValue;
+            foreach (var o in Svc.Objects)
+            {
+                if (DeepDungeonChestPath.ClassifyChest(o.DataId) == null) continue;
+                var d = Vector3.DistanceSquared(o.Position, pos);
+                if (d < bestDist) { bestDist = d; best = o.GameObjectId; }
+            }
+            return best;
+        }
+
+        // Insistently re-open the armed coffer: target it, then interact, a few times a second until
+        // it opens (drops out of the object table) or we time out. Mirrors the potion retry - the game
+        // quietly ignores the interact while we're animation-locked from the pomander, so we just keep
+        // re-attempting until it lands.
+        private void TickReopenCoffer()
+        {
+            if (_reopenChestId == 0) return;
+
+            var now = DateTime.Now;
+            if (now > _reopenDeadline) { _reopenChestId = 0; return; }
+
+            var chest = Svc.Objects.FirstOrDefault(o => o.GameObjectId == _reopenChestId);
+            if (chest == null) { _reopenChestId = 0; return; } // gone = opened (or unloaded) -> done
+
+            if ((now - _reopenLastTry).TotalSeconds < ReopenTryThrottleSeconds) return;
+            _reopenLastTry = now;
+
+            // Target first, then interact once it's the current target (same handshake the game uses).
+            if (Svc.Targets.Target?.GameObjectId != _reopenChestId)
+            {
+                Svc.Targets.Target = chest;
+                return;
+            }
+
+            var ts = TargetSystem.Instance();
+            if (ts != null)
+                ts->InteractWithObject((CSGameObject*)chest.Address, false);
         }
 
         private void UpdateFloorTracking(InstanceContentDeepDungeon* dd)
@@ -620,6 +705,8 @@ namespace YABOT.Features.DeepDungeons
 
                 var prevCount = _prevPomanderCounts[slot];
                 _prevPomanderCounts[slot] = info.Count;
+                if (prevCount > 0 && info.Count == 0)
+                    _slotEmptiedAt[slot] = DateTime.Now;
 
                 var slotRef = ddRow.PomanderSlot[slot];
                 if (slotRef.RowId == 0) continue;
@@ -637,8 +724,11 @@ namespace YABOT.Features.DeepDungeons
                     : info.IsActive;
 
                 // Keep a pomander listed while its effect is active even if the last one was
-                // consumed, so the active marker doesn't vanish the moment the count hits zero.
-                if (info.Count == 0 && !isActive) continue;
+                // consumed, so the active marker doesn't vanish the moment the count hits zero -
+                // and for a short linger after it empties, to bridge the gap before the effect
+                // flag comes up so the row doesn't flicker out and shift the rows below.
+                var lingering = (DateTime.Now - _slotEmptiedAt[slot]).TotalSeconds < EmptyLingerSeconds;
+                if (info.Count == 0 && !isActive && !lingering) continue;
 
                 if (!prime && info.Count > prevCount)
                     _flashStart[shortName] = (DateTime.Now, FlashKind.Pickup);
