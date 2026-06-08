@@ -168,6 +168,17 @@ namespace YABOT.Features.DeepDungeons
         private const double ReopenTimeoutSeconds = 6.0;
         private const double ReopenTryThrottleSeconds = 0.2;
 
+        // Pending pomander use from a Yes click. UsePomander returns void and can be silently rejected
+        // (animation lock, etc.), so we retry until the slot count actually drops - the only proof it
+        // landed - and only then arm the re-open. A use that never goes through opens nothing.
+        private uint? _pendingUseSlot;
+        private byte _pendingUseCount;
+        private DateTime _pendingUseDeadline;
+        private DateTime _pendingUseLastTry = DateTime.MinValue;
+        private bool _pendingThenReopen;
+        private const double UseTimeoutSeconds = 3.0;
+        private const double UseTryThrottleSeconds = 0.5;
+
         // Pickup = green arrows when a count went up; Capped = blue arrows when the game told us we
         // can't carry any more of that item (returned to the coffer), hinting to use one first.
         private enum FlashKind { Pickup, Capped }
@@ -412,6 +423,7 @@ namespace YABOT.Features.DeepDungeons
                 ImGui.PopStyleColor();
 
                 DrawCappedPrompt(dd);
+                TickPendingUse(dd);
                 TickReopenCoffer();
             }
             catch (Exception ex)
@@ -444,14 +456,14 @@ namespace YABOT.Features.DeepDungeons
 
                 if (ImGui.Button("Yes", new Vector2(120, 0)))
                 {
-                    try { dd->UsePomander(slot); }
-                    catch (Exception ex) { Svc.Log.Error(ex, $"[{Name}] prompt use failed"); }
-                    // Now that a slot is free, re-open the coffer we bounced off of (insistently).
-                    if (Config.ReopenCofferAfterUse && _promptChestId != 0)
-                    {
-                        _reopenChestId = _promptChestId;
-                        _reopenDeadline = DateTime.Now.AddSeconds(ReopenTimeoutSeconds);
-                    }
+                    // Don't use (or re-open) inline: the use can be rejected. Hand it to the pending-use
+                    // tick, which retries until the slot count drops and only then arms the re-open, so
+                    // a use that never goes through never opens the coffer.
+                    _pendingUseSlot = slot;
+                    _pendingUseCount = dd->Items[(int)slot].Count;
+                    _pendingUseDeadline = DateTime.Now.AddSeconds(UseTimeoutSeconds);
+                    _pendingUseLastTry = DateTime.MinValue;
+                    _pendingThenReopen = Config.ReopenCofferAfterUse && _promptChestId != 0;
                     _promptSlot = null;
                 }
                 ImGui.SameLine();
@@ -478,6 +490,38 @@ namespace YABOT.Features.DeepDungeons
                 if (d < bestDist) { bestDist = d; best = o.GameObjectId; }
             }
             return best;
+        }
+
+        // Insistently use the pomander a Yes click queued, retrying until the slot count drops (the
+        // only proof it landed, since UsePomander is void and silently no-ops while animation-locked).
+        // Only then arm the re-open - so if the use never goes through, the coffer is left alone.
+        private void TickPendingUse(InstanceContentDeepDungeon* dd)
+        {
+            if (_pendingUseSlot is not { } slot) return;
+
+            var now = DateTime.Now;
+
+            // Landed: count dropped. Optionally hand off to the re-open, then clear.
+            if (dd->Items[(int)slot].Count < _pendingUseCount)
+            {
+                if (_pendingThenReopen)
+                {
+                    _reopenChestId = _promptChestId;
+                    _reopenDeadline = now.AddSeconds(ReopenTimeoutSeconds);
+                }
+                _pendingUseSlot = null;
+                return;
+            }
+
+            // Never went through within the window -> give up without touching the coffer.
+            if (now > _pendingUseDeadline) { _pendingUseSlot = null; return; }
+
+            // Retry a couple times a second; a successful use animation-locks us, which blocks a
+            // second fire until the count drops above, so this won't burn two pomanders.
+            if ((now - _pendingUseLastTry).TotalSeconds < UseTryThrottleSeconds) return;
+            _pendingUseLastTry = now;
+            try { dd->UsePomander(slot); }
+            catch (Exception ex) { Svc.Log.Error(ex, $"[{Name}] pending use failed"); }
         }
 
         // Insistently re-open the armed coffer: target it, then interact, a few times a second until
