@@ -1,12 +1,9 @@
 using Dalamud.Bindings.ImGui;
 using Dalamud.Game.Command;
 using ECommons.DalamudServices;
-using ECommons.Reflection;
 using YABOT.FeaturesSetup;
 using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Reflection;
 
 namespace YABOT.Features.PluginMods
 {
@@ -21,19 +18,12 @@ namespace YABOT.Features.PluginMods
             "the individual Advanced Mitigation skill options still need to be set up in WrathCombo first. " +
             "Use /ymits [on|off|toggle] or the buttons below. Enable this tweak to register the command.";
 
-        public override string RequiredPluginName => PluginName;
+        public override string RequiredPluginName => WrathComboInterop.PluginName;
 
         public override bool UseAutoConfig => false;
 
         public override IEnumerable<(string Command, string Aliases, string Description)> CommandReferences =>
             new[] { ("/ymits", "[on|off|toggle]", "Toggle WrathCombo's tank mitigations (no WrathCombo modification needed).") };
-
-        private const string PluginName = "WrathCombo";
-        private const string ConfigType = "WrathCombo.Core.Configuration";
-        private const string ServiceType = "WrathCombo.Services.Service";
-        private const string PresetStorageType = "WrathCombo.Core.PresetStorage";
-        private const string DictMember = "CustomIntValues";
-        private const string ConfigMember = "Configuration";
 
         // Per-tank mit wiring. WrathCombo's naming is inconsistent, hence the table:
         // - GNB/PLD use *_MitOptions, WAR uses *_MitsOptions, DRK uses *_SimpleMitigation
@@ -104,29 +94,12 @@ namespace YABOT.Features.PluginMods
             }
         }
 
-        private static bool TryGetWrath(out object plugin) =>
-            DalamudReflector.TryGetDalamudPlugin(PluginName, out plugin, suppressErrors: true, ignoreCache: false);
-
-        private static Dictionary<string, int>? GetCustomIntValues()
-        {
-            if (!TryGetWrath(out var pl)) return null;
-            try
-            {
-                return pl.GetStaticFoP<Dictionary<string, int>>(ConfigType, DictMember);
-            }
-            catch (Exception ex)
-            {
-                Svc.Log.Warning($"[WrathComboTankMits] reflection read failed: {ex.Message}");
-                return null;
-            }
-        }
-
         // Use the first tank as the reference for the current on/off state - the command keeps
         // all tanks in sync, so any one of them is representative.
         private static bool TryReadMitState(out bool mitsEnabled)
         {
             mitsEnabled = false;
-            var dict = GetCustomIntValues();
+            var dict = WrathComboInterop.GetCustomIntValues();
             if (dict == null) return false;
 
             var t = Tanks[0];
@@ -137,7 +110,7 @@ namespace YABOT.Features.PluginMods
 
         private static bool TryWriteMitState(bool mitsEnabled)
         {
-            var dict = GetCustomIntValues();
+            var dict = WrathComboInterop.GetCustomIntValues();
             if (dict == null) return false;
 
             foreach (var t in Tanks)
@@ -145,46 +118,13 @@ namespace YABOT.Features.PluginMods
                 var val = mitsEnabled ? t.IncludeValue : 1 - t.IncludeValue;
                 dict[t.StKey] = val;
                 dict[t.AoeKey] = val;
+
+                // Also flip each tank's Advanced Mitigation feature preset.
+                WrathComboInterop.SetPreset(t.AdvancedPreset, mitsEnabled);
             }
 
-            try
-            {
-                if (TryGetWrath(out var pl))
-                {
-                    // Also flip each tank's Advanced Mitigation feature - this Saves and notifies IPC on its own.
-                    foreach (var t in Tanks)
-                        TrySetAdvancedMit(pl, t.AdvancedPreset, mitsEnabled);
-
-                    var configInstance = pl.GetStaticFoP<object>(ServiceType, ConfigMember);
-                    configInstance?.Call("Save", null, Array.Empty<object>());
-                }
-            }
-            catch (Exception ex)
-            {
-                Svc.Log.Warning($"[WrathComboTankMits] Save failed: {ex.Message}");
-            }
-
+            WrathComboInterop.SaveConfig();
             return true;
-        }
-
-        // Enable/disable an Advanced Mitigation preset via WrathCombo's PresetStorage helpers,
-        // which handle parents, conflicts and saving for us.
-        private static void TrySetAdvancedMit(object pl, int preset, bool enabled)
-        {
-            try
-            {
-                var type = pl.GetType().Assembly.GetType(PresetStorageType);
-                var name = enabled ? "EnablePreset" : "DisablePreset";
-                var method = type?.GetMethods(BindingFlags.Public | BindingFlags.Static)
-                    .FirstOrDefault(m => m.Name == name
-                        && m.GetParameters() is { Length: 2 } p
-                        && p[0].ParameterType == typeof(int));
-                method?.Invoke(null, new object?[] { preset, null });
-            }
-            catch (Exception ex)
-            {
-                Svc.Log.Warning($"[WrathComboTankMits] advanced-mit {(enabled ? "enable" : "disable")} failed: {ex.Message}");
-            }
         }
 
         protected override DrawConfigDelegate DrawConfigTree => (ref bool hasChanged) =>
