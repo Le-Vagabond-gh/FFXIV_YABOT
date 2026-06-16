@@ -1198,11 +1198,12 @@ namespace YABOT.Features.DeepDungeons
         // A few pomanders apply an ordinary player status instead of the floor-wide effect the
         // DeepDungeon struct's IsActive flag tracks, so we detect those by status ID. Keys are the
         // stripped pomander name; values are the granted status (Strength -> "Damage Up" 687,
-        // Steel -> "Vulnerability Down" 1100). IDs are language-independent.
+        // Steel -> "Vulnerability Down" 1100, Haste -> "Haste" 4718). IDs are language-independent.
         private static readonly Dictionary<string, uint> PomanderStatusId = new(StringComparer.OrdinalIgnoreCase)
         {
             { "Strength", 687 },
             { "Steel", 1100 },
+            { "Haste", 4718 },
         };
 
         private static bool PlayerHasStatus(uint statusId)
