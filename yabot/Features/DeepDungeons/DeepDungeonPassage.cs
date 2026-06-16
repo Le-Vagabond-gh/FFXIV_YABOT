@@ -14,6 +14,8 @@ namespace YABOT.Features.DeepDungeons
             (4, 10), (4, 10), (4, 10), (4, 10), (4, 10), (4, 10), (4, 10), (4, 10), (4, 10), (5, 13),
         };
 
+        // Heaven-on-High, and Pilgrim's Traverse, which shares the same kills-to-open
+        // distribution across all ten of its floor-sets (verified against ddcompendium).
         private static readonly (byte Min, byte Max)[] HoH =
         {
             (3, 7), (3, 7), (3, 7), (3, 9), (3, 9), (4, 10), (4, 10), (4, 10), (4, 10), (5, 13),
@@ -26,8 +28,8 @@ namespace YABOT.Features.DeepDungeons
 
         /// <summary>
         /// Returns the kills-to-open-passage range for the given deep dungeon and floor, or false on
-        /// boss floors (no passage) or when no data covers the floor (e.g. Pilgrim's Traverse, which
-        /// uses a different votive mechanic).
+        /// boss floors (no passage) or when no data covers the floor (e.g. Eureka Orthos past floor 30,
+        /// not yet documented).
         /// </summary>
         /// <param name="deepDungeonId">DeepDungeon sheet row: 1 = PotD, 2 = HoH, 3 = EO, 4 = Pilgrim's Traverse.</param>
         /// <param name="floor">Absolute floor number.</param>
@@ -43,6 +45,7 @@ namespace YABOT.Features.DeepDungeons
                 1 => Potd,
                 2 => HoH,
                 3 => Eo,
+                4 => HoH, // Pilgrim's Traverse shares HoH's kills-to-open distribution
                 _ => null,
             };
             if (table == null) return false;

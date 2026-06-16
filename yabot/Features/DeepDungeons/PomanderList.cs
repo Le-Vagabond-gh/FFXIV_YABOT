@@ -536,7 +536,10 @@ namespace YABOT.Features.DeepDungeons
             if (now > _reopenDeadline) { _reopenChestId = 0; return; }
 
             var chest = Svc.Objects.FirstOrDefault(o => o.GameObjectId == _reopenChestId);
-            if (chest == null) { _reopenChestId = 0; return; } // gone = opened (or unloaded) -> done
+            // An opened coffer despawns from the table - but not right away; for a beat it lingers
+            // while becoming untargetable. Treat either as "opened, we're done" so the loop doesn't
+            // keep firing on an already-open coffer and re-targeting it (which clears the player's target).
+            if (chest == null || !chest.IsTargetable) { _reopenChestId = 0; return; }
 
             if ((now - _reopenLastTry).TotalSeconds < ReopenTryThrottleSeconds) return;
             _reopenLastTry = now;
@@ -798,10 +801,12 @@ namespace YABOT.Features.DeepDungeons
         {
             // DeepDungeonType switches MagiciteSlot's link target: 1 = DeepDungeonMagicStone
             // (PotD/HoH magicite), 2 = DeepDungeonDemiclone (Eureka Orthos demiclones).
-            // Pilgrim's Traverse (added in 7.4) introduces Juniper Incenses with an unknown
-            // type value not covered by the current schema, so for anything outside 1/2 we
-            // probe both known sheets and use whichever has the row. The UseStone call works
-            // regardless because the engine indexes by slot, not by sheet identity.
+            // Pilgrim's Traverse (added in 7.4) introduces Juniper Incenses with a type value
+            // not covered by the static schema, so we can't resolve their names through a
+            // sheet link. Instead read the game's own pre-resolved name/icon out of the
+            // DeepDungeonStatus agent, which covers every dungeon type; the sheets stay as a
+            // fallback for 1/2 when the agent isn't up. The UseStone call works regardless
+            // because the engine indexes by slot, not by sheet identity.
             var stoneSheet = Svc.Data.GetExcelSheet<DeepDungeonMagicStone>();
             var demicloneSheet = Svc.Data.GetExcelSheet<DeepDungeonDemiclone>();
             var type = ddRow.DeepDungeonType;
@@ -832,6 +837,10 @@ namespace YABOT.Features.DeepDungeons
                 if (slotRef.RowId == 0) continue;
 
                 var (icon, name) = ResolveStoneSlot(type, slotRef.RowId, stoneSheet, demicloneSheet);
+                // Anything that isn't a magic stone (1) or demiclone (2) is a Pilgrim's Traverse
+                // incense; resolve those by RowId (crash-proof, unlike the status agent's name buffers).
+                if (string.IsNullOrEmpty(name) && type != 1 && type != 2)
+                    (icon, name) = ResolvePtIncense(sheetIndex, stoneSheet, demicloneSheet);
                 if (string.IsNullOrEmpty(name)) continue;
 
                 // Flash only on an empty->occupied transition (prevType == 0): a real pickup always
@@ -873,16 +882,44 @@ namespace YABOT.Features.DeepDungeons
             Lumina.Excel.ExcelSheet<DeepDungeonMagicStone> stoneSheet,
             Lumina.Excel.ExcelSheet<DeepDungeonDemiclone> demicloneSheet)
         {
+            // Magicite names come straight from the typed sheet the DeepDungeonType selects: 1 =
+            // DeepDungeonMagicStone (PotD/HoH), 2 = DeepDungeonDemiclone (Eureka Orthos). Pilgrim's
+            // Traverse incenses (type 3) share these sheets at RowIds the unmapped link can't
+            // disambiguate, so the caller resolves them by catalog slot via ResolvePtIncense; we do
+            // NOT probe by RowId here, which returned bogus names (Inferno/Odin). Never touch the
+            // DeepDungeonStatus agent: its Utf8String name buffers are unpopulated while the status
+            // window is closed, and ToString() on one throws an uncatchable AccessViolationException.
             if (deepDungeonType == 1 && stoneSheet.TryGetRow(rowId, out var stone) && stone.Icon != 0)
                 return (stone.Icon, stone.Name.ToString());
             if (deepDungeonType == 2 && demicloneSheet.TryGetRow(rowId, out var demi) && demi.Icon != 0)
                 return (demi.Icon, demi.TitleCase.ToString());
 
-            if (stoneSheet.TryGetRow(rowId, out stone) && stone.Icon != 0)
-                return (stone.Icon, stone.Name.ToString());
-            if (demicloneSheet.TryGetRow(rowId, out demi) && demi.Icon != 0)
-                return (demi.Icon, demi.TitleCase.ToString());
+            return (0, string.Empty);
+        }
 
+        // Pilgrim's Traverse incenses are split across the two magicite sheets at colliding RowIds, so
+        // the unmapped MagiciteSlot link can't disambiguate them (slots 0 and 2 both read RowId 5).
+        // Their MagiciteSlot catalog position is fixed, though, so map each slot to its real sheet+row
+        // and read the localized name + icon from there (verified via xivapi).
+        private enum IncenseSheet { Stone, Demiclone }
+
+        private static readonly Dictionary<int, (IncenseSheet Sheet, uint RowId)> PtIncenseSlots = new()
+        {
+            { 0, (IncenseSheet.Stone, 5) },     // Poisonfruit Incense
+            { 1, (IncenseSheet.Demiclone, 4) }, // Mazeroot Incense
+            { 2, (IncenseSheet.Demiclone, 5) }, // Barkbalm Incense
+        };
+
+        private static (uint Icon, string Name) ResolvePtIncense(
+            int sheetIndex,
+            Lumina.Excel.ExcelSheet<DeepDungeonMagicStone> stoneSheet,
+            Lumina.Excel.ExcelSheet<DeepDungeonDemiclone> demicloneSheet)
+        {
+            if (!PtIncenseSlots.TryGetValue(sheetIndex, out var loc)) return (0, string.Empty);
+            if (loc.Sheet == IncenseSheet.Stone && stoneSheet.TryGetRow(loc.RowId, out var stone) && stone.Icon != 0)
+                return (stone.Icon, stone.Name.ToString());
+            if (loc.Sheet == IncenseSheet.Demiclone && demicloneSheet.TryGetRow(loc.RowId, out var demi) && demi.Icon != 0)
+                return (demi.Icon, demi.TitleCase.ToString());
             return (0, string.Empty);
         }
 
@@ -1153,9 +1190,9 @@ namespace YABOT.Features.DeepDungeons
             { "Doga", "damage summon" },
             { "Onion", "balanced summon" },
             // Pilgrim's Traverse juniper incenses
-            { "Mazeroot", "faerie utility" },
-            { "Barkbalm", "double HP" },
-            { "Poisonfruit", "invuln nuke" },
+            { "Mazeroot", "reveal + cleanse + polymorph" },
+            { "Barkbalm", "double HP + boss dps" },
+            { "Poisonfruit", "invuln + floor wipe" },
         };
 
         // A few pomanders apply an ordinary player status instead of the floor-wide effect the

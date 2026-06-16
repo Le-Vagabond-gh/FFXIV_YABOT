@@ -21,7 +21,7 @@ namespace YABOT.Features.DeepDungeons
         public override string Name => "Auto-Heal (Potions & Regen)";
 
         public override string Description =>
-            "Inside a deep dungeon, automatically drinks the dungeon's HP potion (Max-Potion in PotD, Super-Potion in HoH) when HP drops below a threshold, drinks the regen potion (Sustaining Potion / Empyrean Potion) below a higher threshold, and - on jobs that have one - keeps a self-targeted regen ability up (Gunbreaker's Aurora, Warrior's Equilibrium). Each use is retried every frame until it goes through, so a GCD or animation lock just delays it rather than skipping it.";
+            "Inside a deep dungeon, automatically drinks the dungeon's HP potion (Max-Potion in PotD, Super-Potion in HoH, Hyper-Potion in Eureka Orthos, Ultra-Potion in Pilgrim's Traverse) when HP drops below a threshold, drinks the regen potion (Sustaining / Empyrean / Orthos / Pilgrim's Potion) below a higher threshold, and - on jobs that have one - keeps a self-targeted regen ability up (Gunbreaker's Aurora, Warrior's Equilibrium). Each use is retried every frame until it goes through, so a GCD or animation lock just delays it rather than skipping it.";
 
         public override FeatureType FeatureType => FeatureType.DeepDungeons;
 
@@ -37,12 +37,17 @@ namespace YABOT.Features.DeepDungeons
         public Configs Config { get; private set; } = null!;
 
         // Deep-dungeon-exclusive potions, keyed by DeepDungeon sheet row (dd->DeepDungeonId):
-        // 1 = Palace of the Dead, 2 = Heaven-on-High. Eureka Orthos (3) ships no equivalent
-        // consumables, so potions are simply skipped there (the regen ability still runs).
+        // 1 = Palace of the Dead, 2 = Heaven-on-High, 3 = Eureka Orthos, 4 = Pilgrim's Traverse.
+        // Quality is resolved at use time, so the plain (NQ) id is fine even for the HQ-only
+        // Hyper-Potion / Ultra-Potion.
         private const uint MaxPotion = 13637;        // PotD - instant HP
         private const uint SustainingPotion = 20309; // PotD - Rehabilitation regen
         private const uint SuperPotion = 23167;      // HoH  - instant HP
         private const uint EmpyreanPotion = 23163;   // HoH  - Rehabilitation regen
+        private const uint HyperPotion = 38956;      // EO   - instant HP
+        private const uint OrthosPotion = 38944;     // EO   - Rehabilitation regen
+        private const uint UltraPotion = 47701;      // PT   - instant HP
+        private const uint PilgrimsPotion = 47102;   // PT   - Rehabilitation regen
 
         // Self-regen oGCDs that grant a maintainable HoT buff, keyed by ClassJob row id.
         // Both PotD/HoH potions and these abilities are fire-and-forget survivability.
@@ -138,6 +143,8 @@ namespace YABOT.Features.DeepDungeons
         {
             1 => (MaxPotion, SustainingPotion),
             2 => (SuperPotion, EmpyreanPotion),
+            3 => (HyperPotion, OrthosPotion),
+            4 => (UltraPotion, PilgrimsPotion),
             _ => null,
         };
 
@@ -211,7 +218,7 @@ namespace YABOT.Features.DeepDungeons
         {
             if (ImGui.Checkbox("Auto-use HP potion", ref Config.UseHpPotion)) hasChanged = true;
             if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("Drink Max-Potion (Palace of the Dead) / Super-Potion (Heaven-on-High)\nwhen HP drops below the threshold below.");
+                ImGui.SetTooltip("Drink Max-Potion (PotD) / Super-Potion (HoH) / Hyper-Potion (Eureka Orthos) /\nUltra-Potion (Pilgrim's Traverse) when HP drops below the threshold below.");
             ImGui.Indent();
             ImGui.SetNextItemWidth(200);
             if (ImGui.SliderInt("below this HP %##hppot", ref Config.HpPotionThreshold, 1, 99)) hasChanged = true;
@@ -219,7 +226,7 @@ namespace YABOT.Features.DeepDungeons
 
             if (ImGui.Checkbox("Auto-use regen potion", ref Config.UseRegenPotion)) hasChanged = true;
             if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("Drink Sustaining Potion (PotD) / Empyrean Potion (HoH) when HP drops\nbelow the threshold, unless the Rehabilitation regen is already active.");
+                ImGui.SetTooltip("Drink Sustaining (PotD) / Empyrean (HoH) / Orthos (EO) / Pilgrim's Potion (PT)\nwhen HP drops below the threshold, unless the Rehabilitation regen is already active.");
             ImGui.Indent();
             ImGui.SetNextItemWidth(200);
             if (ImGui.SliderInt("below this HP %##regenpot", ref Config.RegenPotionThreshold, 1, 99)) hasChanged = true;
