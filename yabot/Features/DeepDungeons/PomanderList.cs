@@ -1,5 +1,6 @@
 using Dalamud.Bindings.ImGui;
 using Dalamud.Game.Chat;
+using Dalamud.Hooking;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Interface.Utility;
 using ECommons.DalamudServices;
@@ -168,6 +169,16 @@ namespace YABOT.Features.DeepDungeons
         private const double ReopenTimeoutSeconds = 6.0;
         private const double ReopenTryThrottleSeconds = 0.2;
 
+        // Hook on the player's own object-interact call, used to tell a coffer WE opened apart from one
+        // a party member opened. The "cannot carry any more" capped line fires for us either way (the
+        // coffer's pomander is offered to the whole party), but in a party we only want to react -
+        // prompt or auto-use - to coffers we opened ourselves. We stamp the time whenever the local
+        // player interacts with a deep-dungeon coffer; the capped handler then requires a recent
+        // self-interact before acting. Solo, every open is ours, so the gate is skipped entirely.
+        private Hook<TargetSystem.Delegates.InteractWithObject>? _interactHook;
+        private DateTime _lastSelfChestInteract = DateTime.MinValue;
+        private const double SelfInteractWindowSeconds = 3.0;
+
         // Pending pomander use from a Yes click. UsePomander returns void and can be silently rejected
         // (animation lock, etc.), so we retry until the slot count actually drops - the only proof it
         // landed - and only then arm the re-open. A use that never goes through opens nothing.
@@ -203,6 +214,9 @@ namespace YABOT.Features.DeepDungeons
             _flightUsedOnFloor = 0;
             Overlay = new(this);
             Svc.Chat.ChatMessage += OnChatMessage;
+            _interactHook ??= Svc.Hook.HookFromAddress<TargetSystem.Delegates.InteractWithObject>(
+                TargetSystem.MemberFunctionPointers.InteractWithObject, OnInteractWithObject);
+            _interactHook.Enable();
             base.Enable();
         }
 
@@ -210,12 +224,28 @@ namespace YABOT.Features.DeepDungeons
         {
             SaveConfig(Config);
             Svc.Chat.ChatMessage -= OnChatMessage;
+            _interactHook?.Disable();
+            _interactHook?.Dispose();
+            _interactHook = null;
             if (Overlay != null)
             {
                 P.Ws.RemoveWindow(Overlay);
                 Overlay = null!;
             }
             base.Disable();
+        }
+
+        // Stamp the time the local player interacts with a deep-dungeon coffer, so the capped handler
+        // can tell our own open from a party member's. Wrapped so a throw never breaks interaction.
+        private ulong OnInteractWithObject(TargetSystem* thisPtr, CSGameObject* obj, bool checkLineOfSight)
+        {
+            try
+            {
+                if (obj != null && DeepDungeonChestPath.ClassifyChest(obj->BaseId) != null)
+                    _lastSelfChestInteract = DateTime.Now;
+            }
+            catch (Exception ex) { Svc.Log.Error(ex, $"[{Name}] interact hook failed"); }
+            return _interactHook!.Original(thisPtr, obj, checkLineOfSight);
         }
 
         // Two pomander chat lines drive state here, both resolved against the dungeon's own slots:
@@ -265,6 +295,15 @@ namespace YABOT.Features.DeepDungeons
 
                 // Nothing to spend if we don't actually hold one.
                 if (dd->Items[slot].Count == 0) return;
+
+                // In a party the capped line also fires when a *teammate* opens the coffer - we never
+                // had a shot at that pomander, so don't nag to spend one. Only react to coffers we
+                // opened ourselves, proven by a recent self-interact (see OnInteractWithObject). Solo,
+                // every open is ours, so skip the gate. One open authorises one capped action.
+                if (Svc.Party.Length > 1
+                    && (DateTime.Now - _lastSelfChestInteract).TotalSeconds > SelfInteractWindowSeconds)
+                    return;
+                _lastSelfChestInteract = DateTime.MinValue;
 
                 switch (Config.CappedPomanderAction)
                 {
