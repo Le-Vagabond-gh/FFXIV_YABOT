@@ -32,6 +32,7 @@ namespace YABOT.Features.DeepDungeons
             public bool UseRegenPotion = true;
             public int RegenPotionThreshold = 60;
             public bool UseRegenAbility = true;
+            public bool DisableWithPartyHealer = true;
         }
 
         public Configs Config { get; private set; } = null!;
@@ -114,6 +115,10 @@ namespace YABOT.Features.DeepDungeons
                 var dd = EventFramework.Instance()->GetInstanceContentDeepDungeon();
                 if (dd == null) return; // only ever act inside a deep dungeon
 
+                // Skip the potions when a real healer is in the party - they've got the topping-up
+                // covered. The self-regen oGCDs still fire: they're free upkeep, not healer overlap.
+                var deferToHealer = Config.DisableWithPartyHealer && PartyHasHealer();
+
                 var am = ActionManager.Instance();
                 var now = DateTime.Now;
                 var hpPct = 100f * player.CurrentHp / player.MaxHp;
@@ -121,11 +126,11 @@ namespace YABOT.Features.DeepDungeons
                 var pots = PotionsFor(dd->DeepDungeonId);
 
                 // HP potion under the low threshold (independent item, fires regardless of combat).
-                if (Config.UseHpPotion && pots.HasValue && hpPct < Config.HpPotionThreshold)
+                if (!deferToHealer && Config.UseHpPotion && pots.HasValue && hpPct < Config.HpPotionThreshold)
                     TryUseItem(am, pots.Value.Heal, ref _hpPot, now);
 
                 // Regen potion under the higher threshold, unless Rehabilitation is already ticking.
-                if (Config.UseRegenPotion && pots.HasValue && hpPct < Config.RegenPotionThreshold
+                if (!deferToHealer && Config.UseRegenPotion && pots.HasValue && hpPct < Config.RegenPotionThreshold
                     && !PlayerHasStatusNamed(player, RehabilitationStatus))
                     TryUseItem(am, pots.Value.Regen, ref _regenPot, now);
 
@@ -201,6 +206,18 @@ namespace YABOT.Features.DeepDungeons
             }
         }
 
+        // True when we're in a party (>1 member) and any member is on a healer job (ClassJob.Role == 4)
+        // - including ourselves: if we're the healer, our own kit covers the topping-up too. Solo
+        // (no party) keeps the potions as an emergency net, healer job or not.
+        private static bool PartyHasHealer()
+        {
+            var party = Svc.Party;
+            if (party.Length < 2) return false;
+            foreach (var member in party)
+                if (member.ClassJob.Value.Role == 4) return true;
+            return false;
+        }
+
         private static bool PlayerHasStatusNamed(Dalamud.Game.ClientState.Objects.SubKinds.IPlayerCharacter player, string statusName)
         {
             var sheet = Svc.Data.GetExcelSheet<Lumina.Excel.Sheets.Status>();
@@ -235,6 +252,11 @@ namespace YABOT.Features.DeepDungeons
             if (ImGui.Checkbox("Auto-use regen ability (Aurora / Equilibrium)", ref Config.UseRegenAbility)) hasChanged = true;
             if (ImGui.IsItemHovered())
                 ImGui.SetTooltip("Keep a self-regen oGCD up while in combat:\nGunbreaker's Aurora, Warrior's Equilibrium.\nCast on yourself whenever its buff isn't already active.");
+
+            ImGui.Separator();
+            if (ImGui.Checkbox("Skip potions when a healer is in the party", ref Config.DisableWithPartyHealer)) hasChanged = true;
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Hold the HP and regen potions whenever you're in a party with another\nplayer on a healer job - let them handle the topping-up.\nThe self-regen ability still fires (it's free upkeep, not healer overlap).");
         };
     }
 }
