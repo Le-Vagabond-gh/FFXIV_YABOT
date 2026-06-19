@@ -5,12 +5,14 @@ using Dalamud.Memory;
 using Dalamud.Plugin.Services;
 using ECommons.Automation;
 using ECommons.DalamudServices;
+using ECommons.UIHelpers.AddonMasterImplementations;
 using FFXIVClientStructs.FFXIV.Client.Game.Fate;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using Lumina.Excel.Sheets;
 using YABOT.FeaturesSetup;
 using System;
 using System.Linq;
+using System.Numerics;
 
 namespace YABOT.Features.Other
 {
@@ -50,6 +52,9 @@ namespace YABOT.Features.Other
 
             [FeatureConfigOption("Auto-confirm FATE NPC start dialogs", "", 8)]
             public bool AutoConfirmFateDialog = false;
+
+            [FeatureConfigOption("Skip NPC talk while in a FATE area", "Auto-advances any Talk dialog box.", 9)]
+            public bool SkipFateTalk = false;
         }
 
         public Configs Config { get; private set; } = null!;
@@ -81,6 +86,8 @@ namespace YABOT.Features.Other
             Config = LoadConfig<Configs>() ?? new Configs();
             Svc.Framework.Update += CheckFates;
             Svc.AddonLifecycle.RegisterListener(AddonEvent.PostSetup, "SelectYesno", OnSelectYesnoSetup);
+            Svc.AddonLifecycle.RegisterListener(AddonEvent.PostSetup, "Talk", OnTalkUpdate);
+            Svc.AddonLifecycle.RegisterListener(AddonEvent.PostUpdate, "Talk", OnTalkUpdate);
             base.Enable();
         }
 
@@ -148,11 +155,50 @@ namespace YABOT.Features.Other
             catch { }
         }
 
+        // CurrentFate (and thus IsInFateRadius/fateID) is null until you're formally joined,
+        // which is after the start NPC talk. Walk the zone's fate list and check proximity instead.
+        private bool IsInFateArea(Vector3 pos)
+        {
+            var mgr = FateManager.Instance();
+            if (mgr == null) return false;
+            foreach (var fate in mgr->Fates)
+            {
+                if (fate.Value == null) continue;
+                var loc = fate.Value->Location;
+                var dx = pos.X - loc.X;
+                var dz = pos.Z - loc.Z;
+                if (dx * dx + dz * dz <= fate.Value->Radius * fate.Value->Radius)
+                    return true;
+            }
+            return false;
+        }
+
+        private void OnTalkUpdate(AddonEvent type, AddonArgs args)
+        {
+            try
+            {
+                if (!Config.SkipFateTalk) return;
+
+                var player = Svc.Objects.LocalPlayer;
+                if (player == null) return;
+
+                if (!IsInFateArea(player.Position)) return;
+
+                var addon = (AtkUnitBase*)args.Addon.Address;
+                if (!addon->IsVisible) return;
+
+                new AddonMaster.Talk(args.Addon.Address).Click();
+            }
+            catch (Exception e) { Svc.Log.Error(e, "FateTalk"); }
+        }
+
         public override void Disable()
         {
             SaveConfig(Config);
             Svc.Framework.Update -= CheckFates;
             Svc.AddonLifecycle.UnregisterListener(AddonEvent.PostSetup, "SelectYesno", OnSelectYesnoSetup);
+            Svc.AddonLifecycle.UnregisterListener(AddonEvent.PostSetup, "Talk", OnTalkUpdate);
+            Svc.AddonLifecycle.UnregisterListener(AddonEvent.PostUpdate, "Talk", OnTalkUpdate);
             base.Disable();
         }
     }
