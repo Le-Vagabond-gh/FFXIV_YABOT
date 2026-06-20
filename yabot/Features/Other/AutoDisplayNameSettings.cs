@@ -11,7 +11,7 @@ namespace YABOT.Features.Other
     {
         public override string Name => "Auto Display Name Settings";
 
-        public override string Description => "Automatically changes the display name setting for other PCs based on whether you are in a city, in a duty, in a large-scale duty (alliance raids, Eureka, Bozja, Occult Crescent), or outside.";
+        public override string Description => "Automatically changes the display name setting for other PCs based on whether you are in a city, in a duty, in a deep dungeon, in a large-scale duty (alliance raids, Eureka, Bozja, Occult Crescent), or outside.";
 
         public override FeatureType FeatureType => FeatureType.Other;
 
@@ -30,12 +30,17 @@ namespace YABOT.Features.Other
             public DisplayNameType InCities = DisplayNameType.Always;
             public DisplayNameType OutsideCities = DisplayNameType.Always;
             public DisplayNameType InDuty = DisplayNameType.Always;
+            public DisplayNameType InDeepDungeons = DisplayNameType.Always;
             public DisplayNameType InLargeScaleDuty = DisplayNameType.Always;
         }
 
         public Configs Config { get; set; } = null!;
 
         public override bool UseAutoConfig => false;
+
+        // In deep dungeons the matched players are party members, so they obey the Party
+        // nameplate option, not Other. We override it on entry and restore it on exit.
+        private uint? savedPartyDisp;
 
         protected override DrawConfigDelegate DrawConfigTree => (ref bool hasChanged) =>
         {
@@ -62,6 +67,15 @@ namespace YABOT.Features.Other
             if (ImGui.Combo("In Duty", ref inDuty, DisplayNameLabels, DisplayNameLabels.Length))
             {
                 Config.InDuty = (DisplayNameType)inDuty;
+                hasChanged = true;
+                ApplyForCurrentZone();
+            }
+
+            var inDeepDungeon = (int)Config.InDeepDungeons;
+            ImGui.SetNextItemWidth(200 * ImGui.GetIO().FontGlobalScale);
+            if (ImGui.Combo("In Deep Dungeons", ref inDeepDungeon, DisplayNameLabels, DisplayNameLabels.Length))
+            {
+                Config.InDeepDungeons = (DisplayNameType)inDeepDungeon;
                 hasChanged = true;
                 ApplyForCurrentZone();
             }
@@ -95,11 +109,14 @@ namespace YABOT.Features.Other
             {
                 DisplayNameType desired;
                 var intendedUse = Player.TerritoryIntendedUseEnum;
+                var inDeepDungeon = intendedUse == TerritoryIntendedUseEnum.Deep_Dungeon;
                 if (intendedUse == TerritoryIntendedUseEnum.Alliance_Raid
                     || intendedUse == TerritoryIntendedUseEnum.Eureka
                     || intendedUse == TerritoryIntendedUseEnum.Bozja
                     || intendedUse == TerritoryIntendedUseEnum.Occult_Crescent)
                     desired = Config.InLargeScaleDuty;
+                else if (inDeepDungeon)
+                    desired = Config.InDeepDungeons;
                 else if (Player.IsInDuty)
                     desired = Config.InDuty;
                 else if (intendedUse == TerritoryIntendedUseEnum.City_Area)
@@ -107,13 +124,34 @@ namespace YABOT.Features.Other
                 else
                     desired = Config.OutsideCities;
                 Svc.GameConfig.Set(UiConfigOption.NamePlateDispTypeOther, (uint)desired);
+
+                if (inDeepDungeon)
+                {
+                    if (savedPartyDisp == null && Svc.GameConfig.TryGet(UiConfigOption.NamePlateDispTypeParty, out uint current))
+                        savedPartyDisp = current;
+                    Svc.GameConfig.Set(UiConfigOption.NamePlateDispTypeParty, (uint)desired);
+                }
+                else
+                {
+                    RestorePartyDisp();
+                }
             }
             catch { }
+        }
+
+        private void RestorePartyDisp()
+        {
+            if (savedPartyDisp is uint saved)
+            {
+                Svc.GameConfig.Set(UiConfigOption.NamePlateDispTypeParty, saved);
+                savedPartyDisp = null;
+            }
         }
 
         public override void Disable()
         {
             Svc.ClientState.TerritoryChanged -= OnTerritoryChanged;
+            RestorePartyDisp();
             SaveConfig(Config);
             base.Disable();
         }

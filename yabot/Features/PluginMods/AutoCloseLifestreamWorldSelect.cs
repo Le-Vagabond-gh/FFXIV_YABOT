@@ -28,6 +28,7 @@ namespace YABOT.Features.PluginMods
         private PropertyInfo? isBusyProp;
         private bool reflectionFailed;
         private int consecutiveFailures;
+        private object? cachedPlugin;
 
         public override void Enable()
         {
@@ -52,6 +53,18 @@ namespace YABOT.Features.PluginMods
                 {
                     prevBusy = false;
                     return;
+                }
+
+                // Lifestream reloads (e.g. on update) into a fresh assembly with new Type objects.
+                // Drop cached reflection so it re-resolves against the live instance.
+                if (!ReferenceEquals(plugin, cachedPlugin))
+                {
+                    cachedPlugin = plugin;
+                    selectWorldWindowField = null;
+                    isOpenProp = null;
+                    taskManagerField = null;
+                    isBusyProp = null;
+                    prevBusy = false;
                 }
 
                 if (!EnsureReflection(plugin)) return;
