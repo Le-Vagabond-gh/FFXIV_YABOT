@@ -56,7 +56,6 @@ namespace YABOT.Features.PluginMods
 
         private const string PluginName       = "GatherBuddyReborn";
         private const string VulcanTypeName   = "GatherBuddy.Gui.VulcanWindow";
-        private const int    MaxConsecutiveFailures = 5;
 
         // Reflection cache, rebuilt whenever GBR reloads into a fresh assembly.
         private object?       cachedPlugin;
@@ -74,7 +73,7 @@ namespace YABOT.Features.PluginMods
         private FieldInfo?    searchTextField;      // static string  VulcanWindow._recipeSearchText
         private FieldInfo?    filtersDirtyField;    // static bool    VulcanWindow._filtersDirty
         private bool          reflectionFailed;
-        private int           consecutiveFailures;
+        private long          lastErrorLogMs;
 
         // One-shot-per-opening state.
         private uint prevPopupId;
@@ -86,10 +85,10 @@ namespace YABOT.Features.PluginMods
         private readonly HashSet<int> prevListIds = new();
         private bool listsSeeded;
 
-        // Quest-items overlay: cached craftable items required by accepted quests, rebuilt only when the set
-        // of accepted quest IDs changes (cheap signature check each frame, full scan only on change).
+        // Quest-items overlay: craftable items required by accepted quests. Rebuilt on demand from live data
+        // while the overlay is shown (throttled), never cached across a login/zone transition.
         private readonly List<(uint Id, string Name)> questItems = new();
-        private int? questSignature;
+        private long questItemsScanMs;
 
         private static readonly uint[] Crc32 = BuildCrc32();
 
@@ -141,7 +140,7 @@ namespace YABOT.Features.PluginMods
                     prevListIds.Clear();
                     listsSeeded          = false;
                     questItems.Clear();
-                    questSignature       = null;
+                    questItemsScanMs     = 0;
                 }
 
                 if (!EnsureReflection(plugin)) return;
@@ -180,15 +179,16 @@ namespace YABOT.Features.PluginMods
                 // Optionally tick "Ephemeral" once; the user can untick it afterwards (we won't re-tick).
                 if (Config.CheckEphemeral)
                     ephemeralField!.SetValue(null, true);
-
-                consecutiveFailures = 0;
             }
             catch (Exception ex)
             {
-                if (++consecutiveFailures >= MaxConsecutiveFailures)
+                // Transient errors (e.g. game-state access during login/zone transitions) must NOT permanently
+                // disable the feature - just log, rate-limited. Genuine GBR-incompatibility is latched separately
+                // in EnsureReflection. (A permanent latch here would build up across relogs and kill everything.)
+                if (Environment.TickCount64 - lastErrorLogMs > 10_000)
                 {
-                    reflectionFailed = true;
-                    Svc.Log.Warning($"[{Name}] disabling after {consecutiveFailures} consecutive failures. Last error: {ex.Message}");
+                    lastErrorLogMs = Environment.TickCount64;
+                    Svc.Log.Warning($"[{Name}] update failed: {ex.Message}");
                 }
             }
         }
@@ -270,7 +270,14 @@ namespace YABOT.Features.PluginMods
             if (!Config.ShowQuestItemsOverlay) return;
             if (!TryGetSearchPanelPos(out var panelPos)) return;
 
-            RefreshQuestItems();
+            // Rebuild on demand from live data (throttled to ~1/s). Never reuse state cached across a
+            // login/zone transition - that was the bug where a relog left a stale, empty list in place.
+            if (Environment.TickCount64 - questItemsScanMs > 1000)
+            {
+                questItemsScanMs = Environment.TickCount64;
+                RefreshQuestItems();
+            }
+
             if (questItems.Count == 0) return;
 
             var gap = 6f * ImGui.GetIO().FontGlobalScale;
@@ -305,7 +312,10 @@ namespace YABOT.Features.PluginMods
             for (var i = 0; i < windows.Size; i++)
             {
                 var w = windows[i];
-                if (w.IsNull || !w.Active || w.Name == null) continue;
+                // WasActive (last frame), not Active (this frame): Active is reset each frame and only set once
+                // GBR's Begin() runs, so reading it depends on plugin draw order. WasActive is stable for the
+                // whole frame regardless of whether GBR has drawn yet.
+                if (w.IsNull || !w.WasActive || w.Name == null) continue;
 
                 var name = Marshal.PtrToStringUTF8((nint)w.Name);
                 if (name == null) continue;
@@ -320,26 +330,18 @@ namespace YABOT.Features.PluginMods
             return false;
         }
 
-        // Rebuilds the cached item list only when the accepted-quest set changes. Required items live in the
-        // Quest sheet's QuestParams as ScriptInstruction "RITEM*" with ScriptArg = item id; we keep only those
-        // that are craftable (have a RecipeLookup row), since this drives the crafting recipe search.
+        // Rebuilds the item list fresh from live game data. Required items live in the Quest sheet's QuestParams
+        // as ScriptInstruction "RITEM*" with ScriptArg = item id; we keep only those that are craftable (have a
+        // RecipeLookup row), since this drives the crafting recipe search.
         private unsafe void RefreshQuestItems()
         {
-            var qm = QuestManager.Instance();
-            if (qm == null)
-            {
-                questItems.Clear();
-                questSignature = null;
-                return;
-            }
-
-            var sig = 17;
-            foreach (ref var q in qm->NormalQuests)
-                sig = sig * 31 + q.QuestId;
-            if (sig == questSignature) return;
-            questSignature = sig;
-
             questItems.Clear();
+
+            if (!Svc.ClientState.IsLoggedIn) return;
+
+            var qm = QuestManager.Instance();
+            if (qm == null) return;
+
             var questSheet   = Svc.Data.GetExcelSheet<Quest>();
             var recipeLookup = Svc.Data.GetExcelSheet<RecipeLookup>();
             var itemSheet    = Svc.Data.GetExcelSheet<Item>();
