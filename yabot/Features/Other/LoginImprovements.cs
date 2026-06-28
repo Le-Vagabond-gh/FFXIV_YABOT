@@ -173,6 +173,7 @@ namespace YABOT.Features.Other
             public Vector3 MinionPosition = new(0.7f, 0f, -0.5f);
             public bool SkipLoginConfirm = false;
             public bool SkipLogoutConfirm = false;
+            public bool SkipLogo = false;
             public bool MoveQueueDialog = false;
             //public bool OpenSettingsOnStartup = false;
             public WeaponEmoteBehavior WeaponEmoteMode = WeaponEmoteBehavior.LoopInCombatIdle;
@@ -263,6 +264,7 @@ namespace YABOT.Features.Other
             Svc.AddonLifecycle.RegisterListener(AddonEvent.PreReceiveEvent, "_CharaSelectListMenu", OnCharacterListReceiveEvent);
             Svc.AddonLifecycle.RegisterListener(AddonEvent.PostSetup, "SelectOk", OnQueueDialogSetup);
             Svc.AddonLifecycle.RegisterListener(AddonEvent.PostRefresh, "SelectOk", OnQueueDialogSetup);
+            Svc.AddonLifecycle.RegisterListener(AddonEvent.PostSetup, "Logo", OnLogoPostSetup);
 
             Svc.ClientState.Login += OnLogin;
             Svc.ClientState.Logout += OnLogout;
@@ -1488,6 +1490,35 @@ namespace YABOT.Features.Other
 
         #endregion
 
+        #region Skip Logo
+
+        // Skips the Square Enix / FFXIV logo splash that plays before the title
+        // screen. The "Logo" addon fires its own "advance to title" callback when
+        // clicked/skipped - we fire it as soon as the addon is set up, then hide it.
+        private void OnLogoPostSetup(AddonEvent type, AddonArgs args)
+        {
+            try
+            {
+                if (!Config.SkipLogo)
+                    return;
+
+                var addon = (AtkUnitBase*)args.Addon.Address;
+                if (addon == null)
+                    return;
+
+                var atkValue = stackalloc AtkValue[1];
+                atkValue[0].SetInt(0);
+                addon->FireCallback(1, atkValue, true);
+                addon->Hide(false, false, 1);
+            }
+            catch (Exception e)
+            {
+                Svc.Log.Error(e, "CharaSelectEmote.OnLogoPostSetup");
+            }
+        }
+
+        #endregion
+
         #region Move Queue Dialog
 
         private void MoveQueueDialogIfVisible()
@@ -1687,6 +1718,12 @@ namespace YABOT.Features.Other
                 hasChanged = true;
             }
 
+            if (ImGui.Checkbox("Skip Logo (skip the startup logo splash)", ref Config.SkipLogo))
+            {
+                SaveConfig(Config);
+                hasChanged = true;
+            }
+
             //if (ImGui.Checkbox("Open Pandora's Box settings on startup (title screen)", ref Config.OpenSettingsOnStartup))
             //{
             //    SaveConfig(Config);
@@ -1852,6 +1889,7 @@ namespace YABOT.Features.Other
             Svc.AddonLifecycle.UnregisterListener(OnCharacterListReceiveEvent);
             Svc.AddonLifecycle.UnregisterListener(OnSelectYesnoSetup);
             Svc.AddonLifecycle.UnregisterListener(OnQueueDialogSetup);
+            Svc.AddonLifecycle.UnregisterListener(OnLogoPostSetup);
             SaveConfig(Config);
 
             updateCharaSelectDisplayHook?.Disable();
