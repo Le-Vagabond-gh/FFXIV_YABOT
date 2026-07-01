@@ -1,6 +1,7 @@
 using Dalamud.Game.Addon.Lifecycle;
 using Dalamud.Game.Addon.Lifecycle.AddonArgTypes;
 using Dalamud.Game.ClientState.Conditions;
+using Dalamud.Game.ClientState.Keys;
 using Dalamud.Hooking;
 using ECommons.Automation.NeoTaskManager;
 using ECommons.DalamudServices;
@@ -34,6 +35,7 @@ namespace YABOT.Features.Actions
         {
             public float ThrottleF = 0.1f;
             public bool UseMountRoulette = true;
+            public bool UseFlyingMountRoulette = false;
             public uint SelectedMount = 0;
             public bool DisableInFates = true;
             public bool ExcludeHousing = false;
@@ -194,6 +196,7 @@ namespace YABOT.Features.Actions
         private bool? TryMount(bool bypassOcExclude = false)
         {
             if (Svc.Objects.LocalPlayer is null) return false;
+            if (Svc.KeyState[VirtualKey.CONTROL]) { TaskManager.Abort(); return false; }
             if (Svc.Condition[ConditionFlag.InCombat]) return false;
             if (Svc.Condition[ConditionFlag.Casting]) return false;
             if (Svc.Condition[ConditionFlag.BetweenAreas] || Svc.Condition[ConditionFlag.BetweenAreas51]) return false;
@@ -217,7 +220,19 @@ namespace YABOT.Features.Actions
 
             var am = ActionManager.Instance();
 
-            if (!Config.UseMountRoulette && Config.SelectedMount > 0)
+            // Hold Shift to swap between the two roulettes for this mount only.
+            var useFlying = Config.UseFlyingMountRoulette;
+            if (Svc.KeyState[VirtualKey.SHIFT] && (Config.UseFlyingMountRoulette || Config.UseMountRoulette))
+                useFlying = !useFlying;
+
+            if (useFlying && am->GetActionStatus(ActionType.GeneralAction, 24) == 0)
+            {
+                mountActionTime = Environment.TickCount64;
+                am->UseAction(ActionType.GeneralAction, 24);
+
+                return true;
+            }
+            else if (!Config.UseMountRoulette && !Config.UseFlyingMountRoulette && Config.SelectedMount > 0)
             {
                 if (am->GetActionStatus(ActionType.Mount, Config.SelectedMount) != 0) return false;
                 mountActionTime = Environment.TickCount64;
@@ -293,8 +308,20 @@ namespace YABOT.Features.Actions
         {
             ImGui.PushItemWidth(300);
             if (ImGui.SliderFloat("Set Delay (seconds)", ref Config.ThrottleF, 0.1f, 10f, "%.1f")) haschanged = true;
-            if (ImGui.Checkbox("Use Mount Roulette", ref Config.UseMountRoulette)) haschanged = true;
-            if (!Config.UseMountRoulette)
+            if (ImGui.Checkbox("Use Mount Roulette", ref Config.UseMountRoulette))
+            {
+                if (Config.UseMountRoulette) Config.UseFlyingMountRoulette = false;
+                haschanged = true;
+            }
+            if (ImGui.Checkbox("Use Flying Mount Roulette (falls back to Mount Roulette if unavailable)", ref Config.UseFlyingMountRoulette))
+            {
+                if (Config.UseFlyingMountRoulette) Config.UseMountRoulette = false;
+                haschanged = true;
+            }
+            if (Config.UseMountRoulette || Config.UseFlyingMountRoulette)
+                ImGui.TextDisabled("Hold Shift while mounting to use the other roulette instead.");
+            ImGui.TextDisabled("Hold Control while mounting to skip auto-mount.");
+            if (!Config.UseMountRoulette && !Config.UseFlyingMountRoulette)
             {
                 var ps = PlayerState.Instance();
                 var preview = Svc.Data.GetExcelSheet<Mount>().First(x => x.RowId == Config.SelectedMount).Singular.ExtractText().ToTitleCase();
