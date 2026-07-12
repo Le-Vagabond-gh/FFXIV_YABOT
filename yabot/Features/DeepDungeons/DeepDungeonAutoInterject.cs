@@ -22,7 +22,7 @@ namespace YABOT.Features.DeepDungeons
         public override string Name => "Auto-Interject";
 
         public override string Description =>
-            "Inside a deep dungeon, automatically uses Interject on your current target when it casts an interruptible spell whose name is in your watch list (default \"Malice\"). Retried every frame until it lands, so an animation lock just delays it. Requires Interject - any tank job (or the tank role action) at level 18+.";
+            "Inside a deep dungeon, automatically interrupts your current target when it casts an interruptible spell whose name is in your watch list (default \"Malice\"). Uses whichever interrupt you have available - Interject (tank, lvl 18+) or Head Graze (physical ranged DPS, lvl 24+). Retried every frame until it lands, so an animation lock just delays it.";
 
         public override FeatureType FeatureType => FeatureType.DeepDungeons;
 
@@ -35,9 +35,15 @@ namespace YABOT.Features.DeepDungeons
 
         public Configs Config { get; private set; } = null!;
 
-        private const uint Interject = 7538; // tank role action - interrupts an interruptible cast
+        // Every interrupt role action in the game. We fire whichever one the current job/level can use;
+        // classes without any (casters, healers, melee) simply never find an available action and no-op.
+        private static readonly uint[] InterruptActions =
+        {
+            7538, // Interject   - tank role action, lvl 18
+            7551, // Head Graze  - physical ranged DPS role action (BRD/MCH/DNC), lvl 24
+        };
 
-        // Anti-double-fire window: Interject is a long-cooldown oGCD with nothing in inventory to watch,
+        // Anti-double-fire window: the interrupt is a long-cooldown oGCD with nothing in inventory to watch,
         // so we mirror the auto-heal regen-ability debounce rather than tracking an item count.
         private const double AttemptDebounce = 2.0;
         private DateTime _lastUse = DateTime.MinValue;
@@ -88,11 +94,18 @@ namespace YABOT.Features.DeepDungeons
                 if ((now - _lastUse).TotalSeconds < AttemptDebounce) return;
 
                 var am = ActionManager.Instance();
-                if (am->GetActionStatus(ActionType.Action, Interject) != 0) return; // on cooldown / unavailable
 
-                // Only debounce on an accepted use; a rejection retries next frame.
-                if (am->UseAction(ActionType.Action, Interject, target.GameObjectId))
-                    _lastUse = now;
+                // Loop rather than if/else: an action the current job can't use returns a non-zero status
+                // and must be skipped, not allowed to block the ones after it. Fire the first ready one.
+                foreach (var action in InterruptActions)
+                {
+                    if (am->GetActionStatus(ActionType.Action, action) != 0) continue; // on cooldown / unavailable
+
+                    // Only debounce on an accepted use; a rejection retries next frame.
+                    if (am->UseAction(ActionType.Action, action, target.GameObjectId))
+                        _lastUse = now;
+                    break;
+                }
             }
             catch (Exception ex)
             {
