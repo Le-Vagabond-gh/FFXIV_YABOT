@@ -21,7 +21,7 @@ namespace YABOT.Features.DeepDungeons
         public override string Name => "Auto-Heal (Potions & Regen)";
 
         public override string Description =>
-            "Inside a deep dungeon, automatically drinks the dungeon's HP potion (Max-Potion in PotD, Super-Potion in HoH, Hyper-Potion in Eureka Orthos, Ultra-Potion in Pilgrim's Traverse) when HP drops below a threshold, drinks the regen potion (Sustaining / Empyrean / Orthos / Pilgrim's Potion) below a higher threshold, and - on jobs that have one - keeps a self-targeted regen ability up (Gunbreaker's Aurora, Warrior's Equilibrium). Each use is retried every frame until it goes through, so a GCD or animation lock just delays it rather than skipping it.";
+            "Inside a deep dungeon, automatically drinks the dungeon's HP potion (Max-Potion in PotD, Super-Potion in HoH, Hyper-Potion in Eureka Orthos, Ultra-Potion in Pilgrim's Traverse) when HP drops below a threshold, drinks the regen potion (Sustaining / Empyrean / Orthos / Pilgrim's Potion) below a higher threshold, and - on jobs that have one - keeps a self-targeted regen ability up (Gunbreaker's Aurora, Warrior's Equilibrium). On tanks and physical DPS it also fires Second Wind as an instant self-heal on low HP. Each use is retried every frame until it goes through, so a GCD or animation lock just delays it rather than skipping it.";
 
         public override FeatureType FeatureType => FeatureType.DeepDungeons;
 
@@ -32,6 +32,7 @@ namespace YABOT.Features.DeepDungeons
             public bool UseRegenPotion = true;
             public int RegenPotionThreshold = 60;
             public bool UseRegenAbility = true;
+            public bool UseSecondWind = true;
             public bool DisableWithPartyHealer = true;
         }
 
@@ -57,6 +58,11 @@ namespace YABOT.Features.DeepDungeons
             (37, 16151, 1835), // Gunbreaker - Aurora     -> Aurora
             (21, 3552, 2681),  // Warrior    - Equilibrium -> Equilibrium
         };
+
+        // Second Wind: the Disciple of War role action - an instant self-heal on a ~120s recast,
+        // available to every tank and physical DPS. No buff to watch, so we fire it on low HP and let
+        // GetActionStatus gate availability (non-zero on jobs that don't have it, or while on recast).
+        private const uint SecondWind = 7541;
 
         // Both regen potions grant "Rehabilitation" for 30s. The status sheet reuses that name across
         // many potency tiers (different ids per item level), so we gate on the name rather than a
@@ -90,6 +96,7 @@ namespace YABOT.Features.DeepDungeons
         private ItemUse _hpPot;
         private ItemUse _regenPot;
         private DateTime _lastAbilityUse = DateTime.MinValue;
+        private DateTime _lastSecondWindUse = DateTime.MinValue;
 
         public override void Enable()
         {
@@ -124,9 +131,17 @@ namespace YABOT.Features.DeepDungeons
                 var hpPct = 100f * player.CurrentHp / player.MaxHp;
 
                 var pots = PotionsFor(dd->DeepDungeonId);
+                var inCombat = Svc.Condition[ConditionFlag.InCombat];
 
-                // HP potion under the low threshold (independent item, fires regardless of combat).
-                if (!deferToHealer && Config.UseHpPotion && pots.HasValue && hpPct < Config.HpPotionThreshold)
+                // Second Wind first (in combat only): it's a free instant heal, so we prefer it over
+                // spending a potion. When it's available this frame it "covers" the low-HP heal and we
+                // hold the potion; once it's on recast the potion takes over as the fallback.
+                var secondWindCovers = Config.UseSecondWind && inCombat && hpPct < Config.HpPotionThreshold
+                    && TryUseSecondWind(am, now);
+
+                // HP potion under the low threshold, unless Second Wind is covering the heal this frame.
+                if (!deferToHealer && Config.UseHpPotion && pots.HasValue && hpPct < Config.HpPotionThreshold
+                    && !secondWindCovers)
                     TryUseItem(am, pots.Value.Heal, ref _hpPot, now);
 
                 // Regen potion under the higher threshold, unless Rehabilitation is already ticking.
@@ -135,7 +150,7 @@ namespace YABOT.Features.DeepDungeons
                     TryUseItem(am, pots.Value.Regen, ref _regenPot, now);
 
                 // Self-regen ability: keep it up while in combat (so charges aren't burned exploring).
-                if (Config.UseRegenAbility && Svc.Condition[ConditionFlag.InCombat])
+                if (Config.UseRegenAbility && inCombat)
                     TryUseRegenAbility(am, player, now);
             }
             catch (Exception ex)
@@ -206,6 +221,21 @@ namespace YABOT.Features.DeepDungeons
             }
         }
 
+        // Fire Second Wind on low HP. No buff to gate on, so we lean on GetActionStatus (non-zero when
+        // the job lacks it or it's on recast). Returns true when Second Wind is available this frame -
+        // i.e. it's covering the heal and the caller should hold the potion; false when it's on recast
+        // or the job doesn't have it, so the potion becomes the fallback. A short debounce avoids
+        // double-firing in the animation-lock gap before the recast registers.
+        private bool TryUseSecondWind(ActionManager* am, DateTime now)
+        {
+            if (am->GetActionStatus(ActionType.Action, SecondWind) != 0) return false; // unavailable / on recast
+
+            if ((now - _lastSecondWindUse).TotalSeconds >= AttemptDebounce
+                && am->UseAction(ActionType.Action, SecondWind))
+                _lastSecondWindUse = now;
+            return true;
+        }
+
         // True when we're in a party (>1 member) and any member is on a healer job (ClassJob.Role == 4)
         // - including ourselves: if we're the healer, our own kit covers the topping-up too. Solo
         // (no party) keeps the potions as an emergency net, healer job or not.
@@ -252,6 +282,10 @@ namespace YABOT.Features.DeepDungeons
             if (ImGui.Checkbox("Auto-use regen ability (Aurora / Equilibrium)", ref Config.UseRegenAbility)) hasChanged = true;
             if (ImGui.IsItemHovered())
                 ImGui.SetTooltip("Keep a self-regen oGCD up while in combat:\nGunbreaker's Aurora, Warrior's Equilibrium.\nCast on yourself whenever its buff isn't already active.");
+
+            if (ImGui.Checkbox("Auto-use Second Wind", ref Config.UseSecondWind)) hasChanged = true;
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Use the Second Wind role action (tanks and physical DPS) as an instant\nself-heal when HP drops below the HP potion threshold above.");
 
             ImGui.Separator();
             if (ImGui.Checkbox("Skip potions when a healer is in the party", ref Config.DisableWithPartyHealer)) hasChanged = true;

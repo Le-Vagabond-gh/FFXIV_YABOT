@@ -7,6 +7,7 @@ While inside a deep dungeon, this keeps you alive by automatically using the dun
 - **Auto-use HP potion** - drinks the dungeon's instant-heal potion when your HP drops below the configured percentage (default 30%). The potion is chosen per dungeon: **Max-Potion** (item 13637) in Palace of the Dead, **Super-Potion** (23167) in Heaven-on-High.
 - **Auto-use regen potion** - drinks the dungeon's HP-regen potion below a higher percentage (default 60%): **Sustaining Potion** (20309) in PotD, **Empyrean Potion** (23163) in HoH. Both grant the **Rehabilitation** regen for 30s; it is not re-drunk while that regen is already ticking (detected by status name, which also avoids stacking over a manual drink).
 - **Auto-use regen ability** - on jobs that have a self-targeted regen oGCD, keeps it up while you are in combat, recasting on yourself whenever its buff isn't already active: **Gunbreaker - Aurora** (action 16151, status 1835) and **Warrior - Equilibrium** (action 3552, status 2681). It is gated to in-combat so charges aren't burned while exploring between packs.
+- **Auto-use Second Wind** - fires **Second Wind** (action 7541), the Disciple of War role action, as an instant self-heal when HP drops below the HP potion threshold, **in combat only**. It is checked *before* the HP potion: because it's a free heal, whenever it's available it covers the low-HP heal and the potion is held for that frame; once Second Wind goes on recast the potion takes over as the fallback. It grants no buff, so availability is gated purely on `GetActionStatus` (non-zero on jobs that lack it - casters/healers - or while it's on recast), with a 2-second anti-double-fire debounce.
 
 Eureka Orthos has no equivalent potions, so the potion options simply do nothing there; the regen ability still runs.
 
@@ -25,3 +26,4 @@ The HP potion and regen potion are independent items on their own recasts, so a 
 - **Auto-use HP potion** + **below this HP %** (1-99, default 30)
 - **Auto-use regen potion** + **below this HP %** (1-99, default 60)
 - **Auto-use regen ability (Aurora / Equilibrium)** (default on)
+- **Auto-use Second Wind** (default on)
