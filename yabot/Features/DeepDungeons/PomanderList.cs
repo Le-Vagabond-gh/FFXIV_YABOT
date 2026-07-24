@@ -281,7 +281,16 @@ namespace YABOT.Features.DeepDungeons
                 }
 
                 if (!TryMatchPomanderSlot(ddRow, text, out var slot, out var shortName))
+                {
+                    // Not a pomander. A capped line here is a magicite/incense coffer we couldn't take -
+                    // flash a held row only if the returned item is one we already hold (the message
+                    // names it), so a duplicate lights that row and a brand-new type we've no room for
+                    // lights nothing. UsePomander doesn't apply to magicite, so the flash is the whole
+                    // response (no auto-use/prompt).
+                    if (capped)
+                        FlashHeldMagiciteCapped(dd, ddRow, text);
                     return;
+                }
 
                 if (used)
                 {
@@ -838,35 +847,74 @@ namespace YABOT.Features.DeepDungeons
 
         private void DrawMagiciteRows(InstanceContentDeepDungeon* dd, DeepDungeon ddRow, bool prime)
         {
-            // DeepDungeonType switches MagiciteSlot's link target: 1 = DeepDungeonMagicStone
-            // (PotD/HoH magicite), 2 = DeepDungeonDemiclone (Eureka Orthos demiclones).
-            // Pilgrim's Traverse (added in 7.4) introduces Juniper Incenses with a type value
-            // not covered by the static schema, so we can't resolve their names through a
-            // sheet link. Instead read the game's own pre-resolved name/icon out of the
-            // DeepDungeonStatus agent, which covers every dungeon type; the sheets stay as a
-            // fallback for 1/2 when the agent isn't up. The UseStone call works regardless
-            // because the engine indexes by slot, not by sheet identity.
+            var rows = ResolveHeldMagicite(dd, ddRow);
+
+            // Per-slot pickup flash + prev-slot bookkeeping, over all three inventory slots (not just
+            // the resolved rows) so an emptied tail slot's prevType is still cleared.
+            //
+            // Flash only on an empty->occupied transition (prevType == 0): a real pickup always lands
+            // in a free slot (you can hold at most 3 and can't pick up while full). Using a stone
+            // compacts the array - the survivors shift down toward slot 0 - so an occupied slot's value
+            // changes (nonzero->nonzero, or nonzero->0 at the tail) without anything being picked up;
+            // keying off prevType == 0 ignores that shift. Duplicate magicite share a name across slots,
+            // so the flash key stays per-slot to light only the new row.
+            for (var inventorySlot = 0; inventorySlot < 3; inventorySlot++)
+            {
+                var typeByte = dd->Magicite[inventorySlot];
+                var prevType = _prevMagiciteSlots[inventorySlot];
+                _prevMagiciteSlots[inventorySlot] = typeByte;
+
+                if (prime || prevType != 0 || typeByte == 0) continue;
+                foreach (var row in rows)
+                {
+                    if (row.Slot != (uint)inventorySlot) continue;
+                    _flashStart[MagiciteRowKey(row.Name, row.Slot)] = (DateTime.Now, FlashKind.Pickup);
+                    break;
+                }
+            }
+
+            // Skip the spacing + section when empty - a "No magicite" line is just noise once you've
+            // already cleared the floor.
+            if (rows.Count == 0) return;
+
+            ImGui.Spacing();
+            foreach (var row in rows)
+            {
+                var slotCapture = row.Slot;
+                DrawRow(
+                    row.Icon,
+                    row.Name,
+                    MagiciteRowKey(row.Name, row.Slot),
+                    LookupDescription(row.Name, MagiciteDescriptions),
+                    count: 1,
+                    showCount: false,
+                    isActive: false,
+                    () => dd->UseStone(slotCapture));
+            }
+        }
+
+        // Resolve the magicite/demiclone/incense currently held, one entry per occupied inventory slot.
+        //
+        // DeepDungeonType switches MagiciteSlot's link target: 1 = DeepDungeonMagicStone (PotD/HoH
+        // magicite), 2 = DeepDungeonDemiclone (Eureka Orthos demiclones). Pilgrim's Traverse (added in
+        // 7.4) introduces Juniper Incenses with a type value the static schema's link can't resolve, so
+        // those are mapped by catalog slot in ResolvePtIncense.
+        //
+        // The 3-byte Magicite array is NOT (count-per-MagiciteSlot-index). Each byte is the 1-based
+        // MagiciteSlot index of the magicite occupying that inventory slot, or 0 if empty. So
+        // Magicite[0] = 3 means inventory slot 0 holds the type at MagiciteSlot[2] (e.g. Vortex in HoH),
+        // with an implicit count of 1 - you can hold at most three different magicite, one per inventory
+        // slot. UseStone takes the inventory slot (0-2), not the MagiciteSlot index.
+        private List<(uint Icon, string Name, uint Slot)> ResolveHeldMagicite(InstanceContentDeepDungeon* dd, DeepDungeon ddRow)
+        {
             var stoneSheet = Svc.Data.GetExcelSheet<DeepDungeonMagicStone>();
             var demicloneSheet = Svc.Data.GetExcelSheet<DeepDungeonDemiclone>();
             var type = ddRow.DeepDungeonType;
 
-            // The 3-byte _magicite array is NOT (count-per-MagiciteSlot-index). Each byte is the
-            // 1-based MagiciteSlot index of the magicite occupying that inventory slot, or 0 if
-            // empty. So _magicite[0] = 3 means inventory slot 0 currently holds the type at
-            // MagiciteSlot[2] (e.g. Vortex in HoH), with an implicit count of 1 - you can hold
-            // at most three different magicite, one per inventory slot. UseStone takes the
-            // inventory slot (0-2), not the MagiciteSlot index.
-            //
-            // Collect first so we can skip the spacing + section when empty - a "No magicite"
-            // line is just noise once you've already cleared the floor.
-            var rows = new List<(uint Icon, string Name, byte Count, uint Slot)>();
+            var rows = new List<(uint Icon, string Name, uint Slot)>();
             for (var inventorySlot = 0; inventorySlot < 3; inventorySlot++)
             {
                 var typeByte = dd->Magicite[inventorySlot];
-
-                var prevType = _prevMagiciteSlots[inventorySlot];
-                _prevMagiciteSlots[inventorySlot] = typeByte;
-
                 if (typeByte == 0) continue;
 
                 var sheetIndex = typeByte - 1;
@@ -882,34 +930,21 @@ namespace YABOT.Features.DeepDungeons
                     (icon, name) = ResolvePtIncense(sheetIndex, stoneSheet, demicloneSheet);
                 if (string.IsNullOrEmpty(name)) continue;
 
-                // Flash only on an empty->occupied transition (prevType == 0): a real pickup always
-                // lands in a free slot (you can hold at most 3 and can't pick up while full). Using a
-                // stone compacts the array - the survivors shift down toward slot 0 - so an occupied
-                // slot's value changes (nonzero->nonzero, or nonzero->0 at the tail) without anything
-                // being picked up; keying off prevType == 0 ignores that shift. Duplicate magicite
-                // share a name across slots, so the flash key stays per-slot to light only the new row.
-                if (!prime && prevType == 0)
-                    _flashStart[MagiciteRowKey(name, (uint)inventorySlot)] = (DateTime.Now, FlashKind.Pickup);
-
-                rows.Add((icon, name, (byte)1, (uint)inventorySlot));
+                rows.Add((icon, name, (uint)inventorySlot));
             }
+            return rows;
+        }
 
-            if (rows.Count == 0) return;
-
-            ImGui.Spacing();
-            foreach (var row in rows)
-            {
-                var slotCapture = row.Slot;
-                DrawRow(
-                    row.Icon,
-                    row.Name,
-                    MagiciteRowKey(row.Name, row.Slot),
-                    LookupDescription(row.Name, MagiciteDescriptions),
-                    row.Count,
-                    showCount: false,
-                    isActive: false,
-                    () => dd->UseStone(slotCapture));
-            }
+        // A capped coffer line that isn't a pomander is a magicite/incense we couldn't take. Magicite
+        // show no count and never get the blue max-count tint, so a blue capped flash on the row is
+        // their only "spend one first" cue. Flash only the row(s) whose name the message contains, i.e.
+        // an item we already hold some of - a brand-new type we simply have no room for names nothing we
+        // hold and flashes nothing.
+        private void FlashHeldMagiciteCapped(InstanceContentDeepDungeon* dd, DeepDungeon ddRow, string text)
+        {
+            foreach (var row in ResolveHeldMagicite(dd, ddRow))
+                if (text.Contains(row.Name, StringComparison.OrdinalIgnoreCase))
+                    _flashStart[MagiciteRowKey(row.Name, row.Slot)] = (DateTime.Now, FlashKind.Capped);
         }
 
         // Per-slot flash/row identity for magicite, since duplicates share a display name.
