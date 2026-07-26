@@ -222,6 +222,12 @@ namespace YABOT.Features.UI
 
         private void RestoreNativeText()
         {
+            // Disable() can run off the framework thread during plugin unload / game shutdown,
+            // where Svc.Objects.LocalPlayer throws "Not on main thread!". Skip the immediate
+            // refresh in that case - the game repaints the widget with real values on its next
+            // native update anyway, and we avoid poking native addon memory mid-teardown.
+            if (!Dalamud.Utility.ThreadSafety.IsMainThread) return;
+
             var addon = (AddonParameterWidget*)Svc.GameGui.GetAddonByName("_ParameterWidget").Address;
             if (addon == null) return;
             if (Svc.Objects.LocalPlayer is not { } player) return;
