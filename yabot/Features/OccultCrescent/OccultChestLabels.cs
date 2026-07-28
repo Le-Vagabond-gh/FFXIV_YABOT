@@ -84,6 +84,8 @@ namespace YABOT.Features.OccultCrescent
                     var distance = Vector3.Distance(playerPos, obj.Position);
                     if (distance > Config.MaxDistance) continue;
 
+                    // Unopened Occult chests report IsTargetable == false through Dalamud's wrapper,
+                    // so visibility must be checked via RenderFlags + Treasure.State instead.
                     var treasure = (FFXIVClientStructs.FFXIV.Client.Game.Object.Treasure*)obj.Address;
                     if (treasure->RenderFlags != 0) continue;
                     if (treasure->State != FFXIVClientStructs.FFXIV.Client.Game.Object.Treasure.TreasureState.Unopened) continue;

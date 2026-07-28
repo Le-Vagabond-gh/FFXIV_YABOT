@@ -25,6 +25,8 @@ public static class OccultChestHelper
     public static readonly Vector3 UnknownRgb = new(1f, 1f, 1f);
 
     // A treasure object's BaseId is its Treasure sheet row; the SGB link identifies the coffer model.
+    // Occult chest rows per EurekaTrackerAutoPopper: South Horn 1789-1856, North Horn 2006-2073 -
+    // classifying by SGB instead of BaseId range keeps this working for future zones.
     public static OccultChestKind Classify(uint treasureBaseId)
     {
         try

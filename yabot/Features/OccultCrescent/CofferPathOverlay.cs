@@ -24,6 +24,7 @@ namespace YABOT.Features.OccultCrescent
         public override FeatureType FeatureType => FeatureType.OccultCrescent;
         public override bool UseAutoConfig => true;
 
+        // North Horn is 1346 - add its paths here once the community maps its chests.
         private const uint SouthHornTerritoryId = 1252;
 
         public class Configs : FeatureConfig
