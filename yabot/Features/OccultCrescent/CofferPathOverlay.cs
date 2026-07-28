@@ -53,8 +53,6 @@ namespace YABOT.Features.OccultCrescent
         // Match the wiki image's exact line colors (R 249 G 50 B 40 / R 36 G 98 B 130).
         private static readonly Vector3 RedRgb = new(249f / 255f, 50f / 255f, 40f / 255f);
         private static readonly Vector3 BlueRgb = new(36f / 255f, 98f / 255f, 130f / 255f);
-        private static readonly Vector3 BronzeRgb = new(0.722f, 0.451f, 0.200f);
-        private static readonly Vector3 SilverRgb = new(0.831f, 0.835f, 0.847f);
         private static readonly Vector3 BlackRgb = Vector3.Zero;
 
         public override void Enable()
@@ -135,8 +133,8 @@ namespace YABOT.Features.OccultCrescent
             return new Palette(
                 Red:     ImGui.GetColorU32(new Vector4(RedRgb,    a)),
                 Blue:    ImGui.GetColorU32(new Vector4(BlueRgb,   a)),
-                Bronze:  ImGui.GetColorU32(new Vector4(BronzeRgb, a)),
-                Silver:  ImGui.GetColorU32(new Vector4(SilverRgb, a)),
+                Bronze:  ImGui.GetColorU32(new Vector4(OccultChestHelper.BronzeRgb, a)),
+                Silver:  ImGui.GetColorU32(new Vector4(OccultChestHelper.SilverRgb, a)),
                 Outline: ImGui.GetColorU32(new Vector4(BlackRgb,  a)));
         }
 

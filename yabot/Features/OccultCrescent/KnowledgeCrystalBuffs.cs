@@ -100,7 +100,11 @@ namespace YABOT.Features.OccultCrescent
             base.Disable();
         }
 
-        private const uint KnowledgeCrystalBaseId = 2007457;
+        // Nameless generic marker placed next to the South Horn crystal (BaseId is reused elsewhere,
+        // hence the extra aetheryte-proximity requirement to disambiguate).
+        private const uint KnowledgeCrystalMarkerBaseId = 2007457;
+        // The named "knowledge crystal" EObj; its SGB is shared by South and North Horn.
+        private const uint KnowledgeCrystalBaseId = 2013856;
 
         private bool IsNearAetheryte()
         {
@@ -110,24 +114,23 @@ namespace YABOT.Features.OccultCrescent
                 Vector3.Distance(x.Position, Player.Object.Position) < 20f);
         }
 
-        private bool IsNearKnowledgeCrystal()
+        private bool IsNearEventObj(uint baseId, float maxDistance)
         {
             if (Player.Object == null) return false;
             return Svc.Objects.Any(x =>
             {
                 if (x.ObjectKind != ObjectKind.EventObj) return false;
-                if (x.Name.ToString().Length > 0) return false;
-                if (Vector3.Distance(x.Position, Player.Object.Position) > 5f) return false;
+                if (Vector3.Distance(x.Position, Player.Object.Position) > maxDistance) return false;
                 var baseObj = (FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject*)x.Address;
-                return baseObj->BaseId == KnowledgeCrystalBaseId;
+                return baseObj->BaseId == baseId;
             });
         }
 
         private bool ShowCrystalOverlay()
         {
-            return !Svc.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat]
-                && IsNearAetheryte()
-                && IsNearKnowledgeCrystal();
+            if (Svc.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat]) return false;
+            return IsNearEventObj(KnowledgeCrystalBaseId, 5f)
+                || (IsNearAetheryte() && IsNearEventObj(KnowledgeCrystalMarkerBaseId, 5f));
         }
 
         private bool ShowTreasuresightOverlay()
