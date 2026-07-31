@@ -8,6 +8,8 @@ While in Occult Crescent, in combat and with an enemy targeted, automatically fi
 
 Heals, resurrections, movement abilities, and out-of-combat utility (Zeninage, Occult Falcon, Vigilance, Steal...) are never used.
 
+Actions whose effects don't work on bosses are skipped against boss (level "??") targets: the instant-kill and %HP attacks (Iainuki, Phantom Fire, Finisher, Occult Missile, Doomsday) and the hard crowd control debuffs (Occult Toad, Occult Slowga, Mesmerize).
+
 Actions with a cast time are skipped while you are moving. At most one action is fired every 700ms so the feature doesn't fight your own inputs. Works alongside WrathCombo's auto-rotation.
 
 Notes:

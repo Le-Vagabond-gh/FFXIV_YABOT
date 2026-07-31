@@ -36,7 +36,9 @@ namespace YABOT.Features.OccultCrescent
             Buff,        // fire unless the player already has one of the statuses
         }
 
-        private readonly record struct Entry(Kind Kind, uint[] Statuses);
+        // NotOnBosses: skipped against boss-rank targets (level "??"), where the action's effect
+        // (instant kill, %HP damage, hard crowd control) doesn't work "with some exceptions".
+        private readonly record struct Entry(Kind Kind, uint[] Statuses, bool NotOnBosses = false);
 
         private static readonly uint[] None = Array.Empty<uint>();
 
@@ -48,10 +50,10 @@ namespace YABOT.Features.OccultCrescent
             [41594] = new(Kind.Damage, None), // Deadly Blow
             [41595] = new(Kind.Damage, None), // Phantom Kick
             [41596] = new(Kind.Damage, None), // Occult Counter (only ready right after a parry)
-            [41605] = new(Kind.Damage, None), // Iainuki
+            [41605] = new(Kind.Damage, None, NotOnBosses: true), // Iainuki (10% instant kill)
             [41623] = new(Kind.Damage, None), // Occult Comet (8s cast)
             // --- Damage: Phantom Cannoneer ---
-            [41626] = new(Kind.Damage, None), // Phantom Fire
+            [41626] = new(Kind.Damage, None, NotOnBosses: true), // Phantom Fire (5% instant kill)
             [41627] = new(Kind.Damage, None), // Holy Cannon
             [41628] = new(Kind.Damage, None), // Dark Cannon
             [41629] = new(Kind.Damage, None), // Shock Cannon
@@ -65,7 +67,7 @@ namespace YABOT.Features.OccultCrescent
             [46591] = new(Kind.Damage, None), // Sundering Spellblade
             [46592] = new(Kind.Damage, None), // Holy Spellblade
             [46593] = new(Kind.Damage, None), // Blazing Spellblade
-            [46594] = new(Kind.Damage, None), // Finisher
+            [46594] = new(Kind.Damage, None, NotOnBosses: true), // Finisher (25% instant kill)
             [46596] = new(Kind.Damage, None), // Long Reach
             [46597] = new(Kind.Damage, None), // Bladeblitz
             // --- Damage: Phantom Dancer (Dance cycle) ---
@@ -92,7 +94,7 @@ namespace YABOT.Features.OccultCrescent
             [49084] = new(Kind.Damage, None), // Megaflare (6s cast)
             // --- Damage: Phantom Blue Mage / Red Mage / Necromancer ---
             [49085] = new(Kind.Damage, None), // Occult Aero
-            [49086] = new(Kind.Damage, None), // Occult Missile
+            [49086] = new(Kind.Damage, None, NotOnBosses: true), // Occult Missile (%HP damage)
             [49087] = new(Kind.Damage, None), // Occult Aqua Breath
             [49092] = new(Kind.Damage, None), // Occult Fire II
             [49095] = new(Kind.Damage, None), // Occult Blizzard II
@@ -101,14 +103,14 @@ namespace YABOT.Features.OccultCrescent
             [49098] = new(Kind.Damage, None), // Deep Freeze
             [49099] = new(Kind.Damage, None), // Hell Wind
             [49100] = new(Kind.Damage, None), // Chaos Drive
-            [49101] = new(Kind.Damage, None), // Doomsday (consumes 10% max HP)
+            [49101] = new(Kind.Damage, None, NotOnBosses: true), // Doomsday (consumes 10% max HP)
 
             // --- Debuffs (blocked while the target already has the status, from any source) ---
-            [41621] = new(Kind.Debuff, new uint[] { 427, 1568 }), // Occult Slowga -> Slow+
+            [41621] = new(Kind.Debuff, new uint[] { 427, 1568 }, NotOnBosses: true), // Occult Slowga -> Slow+
             [41624] = new(Kind.Debuff, new uint[] { 4259 }),      // Occult Mage Masher
             [41649] = new(Kind.Debuff, new uint[] { 4279 }),      // Pilfer Weapon -> Weapon Pilfered
-            [46605] = new(Kind.Debuff, new uint[] { 4802 }),      // Mesmerize -> Mesmerized
-            [49075] = new(Kind.Debuff, new uint[] { 5317 }),      // Occult Toad
+            [46605] = new(Kind.Debuff, new uint[] { 4802 }, NotOnBosses: true), // Mesmerize -> Mesmerized
+            [49075] = new(Kind.Debuff, new uint[] { 5317 }, NotOnBosses: true), // Occult Toad
             [49094] = new(Kind.Debuff, None),                     // Occult Libra (hidden status - internal timer below)
 
             // --- Buffs (blocked while the player already has the status, from any source) ---
@@ -230,8 +232,24 @@ namespace YABOT.Features.OccultCrescent
             }
         }
 
+        // Boss detection matching the level "??" / "(c)??" targets. Occult Crescent bosses
+        // (e.g. Regnant Chimera) carry BNpcBase rank 1 - normal field trash is rank 0; ranks
+        // 2 (boss) and 6 (raid boss) are included for completeness.
+        private static HashSet<uint>? bossBaseIds;
+
+        private static bool IsBoss(IBattleNpc target)
+        {
+            bossBaseIds ??= Svc.Data.GetExcelSheet<Lumina.Excel.Sheets.BNpcBase>()
+                .Where(x => x.Rank is 1 or 2 or 6)
+                .Select(x => x.RowId)
+                .ToHashSet();
+            return bossBaseIds.Contains(target.BaseId);
+        }
+
         private bool Eligible(Entry entry, uint actionId, SheetInfo info, IPlayerCharacter player, IBattleNpc target)
         {
+            if (entry.NotOnBosses && IsBoss(target)) return false;
+
             switch (entry.Kind)
             {
                 case Kind.Buff:
