@@ -94,6 +94,8 @@ namespace YABOT.Features.OccultCrescent
             [49084] = new(Kind.Damage, None), // Megaflare (6s cast)
             // --- Damage: Phantom Blue Mage / Red Mage / Necromancer ---
             [49085] = new(Kind.Damage, None), // Occult Aero
+            [49089] = new(Kind.Damage, None), // Occult Aero II (replaces Occult Aero in the slot at higher job level)
+            [49091] = new(Kind.Damage, None), // Occult Aero III (replaces Occult Aero II)
             [49086] = new(Kind.Damage, None, NotOnBosses: true), // Occult Missile (%HP damage)
             [49087] = new(Kind.Damage, None), // Occult Aqua Breath
             [49092] = new(Kind.Damage, None), // Occult Fire II
@@ -127,7 +129,7 @@ namespace YABOT.Features.OccultCrescent
             [46604] = new(Kind.Buff, new uint[] { 4800 }),        // Steadfast Stance
             [49063] = new(Kind.Buff, new uint[] { 5327 }),        // Smoke
             [49066] = new(Kind.Buff, new uint[] { 4873 }),        // Image
-            [49088] = new(Kind.Buff, new uint[] { 5321 }),        // Occult Mighty Guard
+            // Occult Mighty Guard (49088) deliberately excluded: defensive cooldown, not worth burning automatically.
         };
 
         // Occult Libra applies no visible status, so reapplication is gated by a per-target timer
