@@ -76,6 +76,8 @@ namespace YABOT.Features.Actions
         {
             if (!Config.AutoConfirmReturnInOccultCrescent) return;
             if (!IsOccultCrescent()) return;
+            // Never auto-confirm Return inside a Forked Tower instance - it leaves the duty.
+            if (IsInsideForkedTower()) return;
             if (Svc.Condition[ConditionFlag.Unconscious]) return;
 
             try
@@ -104,7 +106,8 @@ namespace YABOT.Features.Actions
                 {
                     if (Config.ExcludeOccultCrescent && IsOccultCrescent())
                     {
-                        if (Config.UseReturnInOccultCrescent)
+                        // Never Return inside a Forked Tower instance - it leaves the duty.
+                        if (Config.UseReturnInOccultCrescent && !IsInsideForkedTower())
                         {
                             TaskManager.EnqueueWithTimeout(TryReturn, 15000);
                             TaskManager.EnqueueWithTimeout(ConfirmReturn, 5000);
@@ -169,6 +172,7 @@ namespace YABOT.Features.Actions
 
         private bool? TryReturn()
         {
+            if (IsInsideForkedTower()) return true; // safety net: abort, Return would leave the duty
             if (Svc.Condition[ConditionFlag.InCombat]) return false;
             if (Svc.Condition[ConditionFlag.Casting]) return false;
             if (Config.DisableInFates && FateManager.Instance()->CurrentFate != null) return false;

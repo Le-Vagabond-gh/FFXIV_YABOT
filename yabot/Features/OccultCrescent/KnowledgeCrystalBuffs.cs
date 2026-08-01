@@ -103,8 +103,12 @@ namespace YABOT.Features.OccultCrescent
         // Nameless generic marker placed next to the South Horn crystal (BaseId is reused elsewhere,
         // hence the extra aetheryte-proximity requirement to disambiguate).
         private const uint KnowledgeCrystalMarkerBaseId = 2007457;
+        // The same generic marker also sits at Teleportation Sigils inside the Forked Tower, so
+        // sigil proximity is used as a negative filter there.
+        private const uint TeleportationSigilBaseId = 2015216;
         // The named "knowledge crystal" EObj; its SGB is shared by South and North Horn.
         private const uint KnowledgeCrystalBaseId = 2013856;
+
 
         private bool IsNearAetheryte()
         {
@@ -129,8 +133,13 @@ namespace YABOT.Features.OccultCrescent
         private bool ShowCrystalOverlay()
         {
             if (Svc.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.InCombat]) return false;
-            return IsNearEventObj(KnowledgeCrystalBaseId, 5f)
-                || (IsNearAetheryte() && IsNearEventObj(KnowledgeCrystalMarkerBaseId, 5f));
+            // Forked Tower crystals consist of only the nameless marker - no named crystal EObj,
+            // no aetheryte nearby - so the marker alone is enough inside the tower, except next
+            // to Teleportation Sigils, which carry the same marker.
+            if (IsNearEventObj(KnowledgeCrystalBaseId, 5f)) return true;
+            if (!IsNearEventObj(KnowledgeCrystalMarkerBaseId, 5f)) return false;
+            if (IsNearAetheryte()) return true;
+            return ZoneHelper.IsInsideForkedTower() && !IsNearEventObj(TeleportationSigilBaseId, 11f);
         }
 
         private bool ShowTreasuresightOverlay()
