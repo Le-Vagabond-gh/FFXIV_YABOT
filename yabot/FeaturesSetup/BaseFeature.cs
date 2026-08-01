@@ -276,6 +276,10 @@ public abstract class BaseFeature
 
     public virtual bool UseAutoConfig => false;
 
+    // Whether DrawConfig would render an expandable options tree (used by the UI to decide if a
+    // CommandFeature, normally only listed in the command table, still needs a settings entry).
+    public bool HasConfigUI => UseAutoConfig || DrawConfigTree != null;
+
     public string LocalizedName => this.Name;
 
     public bool DrawConfig(ref bool hasChanged)

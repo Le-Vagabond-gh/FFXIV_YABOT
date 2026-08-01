@@ -217,7 +217,17 @@ internal class MainWindow : Window
         foreach (var feature in list)
         {
             // CommandFeatures are documented in the command table; they don't have a checkbox toggle.
-            if (feature is CommandFeature) continue;
+            // Those exposing extra options still get their config tree drawn here.
+            if (feature is CommandFeature)
+            {
+                if (!feature.HasConfigUI) continue;
+                var cfgChanged = false;
+                feature.DrawConfig(ref cfgChanged);
+                ImGui.Spacing();
+                ImGui.TextWrapped(feature.Description);
+                ImGui.Separator();
+                continue;
+            }
 
             // Checkbox reflects the user's persisted preference, not the runtime Enabled state.
             // The two are decoupled: a user can have a feature checked even when its dependency
