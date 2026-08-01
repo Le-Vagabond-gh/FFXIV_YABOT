@@ -50,10 +50,11 @@ namespace YABOT.Features.OccultCrescent
             [41594] = new(Kind.Damage, None), // Deadly Blow
             [41595] = new(Kind.Damage, None), // Phantom Kick
             [41596] = new(Kind.Damage, None), // Occult Counter (only ready right after a parry)
-            [41605] = new(Kind.Damage, None, NotOnBosses: true), // Iainuki (10% instant kill)
+            [41605] = new(Kind.Damage, None), // Iainuki (kill proc fizzles on bosses, potency still applies)
+            [41606] = new(Kind.Damage, None), // Zeninage (consumes an Occult Coffer per use)
             [41623] = new(Kind.Damage, None), // Occult Comet (8s cast)
             // --- Damage: Phantom Cannoneer ---
-            [41626] = new(Kind.Damage, None, NotOnBosses: true), // Phantom Fire (5% instant kill)
+            [41626] = new(Kind.Damage, None), // Phantom Fire (kill proc fizzles on bosses, potency still applies)
             [41627] = new(Kind.Damage, None), // Holy Cannon
             [41628] = new(Kind.Damage, None), // Dark Cannon
             [41629] = new(Kind.Damage, None), // Shock Cannon
@@ -67,7 +68,7 @@ namespace YABOT.Features.OccultCrescent
             [46591] = new(Kind.Damage, None), // Sundering Spellblade
             [46592] = new(Kind.Damage, None), // Holy Spellblade
             [46593] = new(Kind.Damage, None), // Blazing Spellblade
-            [46594] = new(Kind.Damage, None, NotOnBosses: true), // Finisher (25% instant kill)
+            [46594] = new(Kind.Damage, None), // Finisher (kill proc fizzles on bosses, potency still applies)
             [46596] = new(Kind.Damage, None), // Long Reach
             [46597] = new(Kind.Damage, None), // Bladeblitz
             // --- Damage: Phantom Dancer (Dance cycle) ---
@@ -105,7 +106,7 @@ namespace YABOT.Features.OccultCrescent
             [49098] = new(Kind.Damage, None), // Deep Freeze
             [49099] = new(Kind.Damage, None), // Hell Wind
             [49100] = new(Kind.Damage, None), // Chaos Drive
-            [49101] = new(Kind.Damage, None, NotOnBosses: true), // Doomsday (consumes 10% max HP)
+            [49101] = new(Kind.Damage, None), // Doomsday (consumes 10% max HP; dispel bonus fizzles on bosses)
 
             // --- Debuffs (blocked while the target already has the status, from any source) ---
             [41621] = new(Kind.Debuff, new uint[] { 427, 1568 }, NotOnBosses: true), // Occult Slowga -> Slow+
