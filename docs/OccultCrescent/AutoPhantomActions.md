@@ -10,6 +10,8 @@ Heals, resurrections, movement abilities, and out-of-combat utility (Occult Falc
 
 Actions with no effect on bosses are skipped against boss (level "??") targets: Occult Missile (pure %HP damage) and the hard crowd control debuffs (Occult Toad, Occult Slowga, Mesmerize). Attacks whose instant-kill bonus fizzles on bosses (Iainuki, Phantom Fire, Finisher) still fire for their normal damage.
 
+Actions that share a cooldown (like the phantom summoner's summons) follow the duty action panel: only the action currently shown in the panel's big main button is used, so rotate the panel to choose which one the feature casts. If the main button holds an action the feature never uses (like Earthen Wall), the shared cooldown is left untouched for manual use.
+
 Actions with a cast time are skipped while you are moving. At most one action is fired every 700ms so the feature doesn't fight your own inputs. Works alongside WrathCombo's auto-rotation.
 
 Notes:

@@ -5,6 +5,7 @@ using Dalamud.Plugin.Services;
 using ECommons.DalamudServices;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
+using FFXIVClientStructs.FFXIV.Component.GUI;
 using YABOT.FeaturesSetup;
 using YABOT.Helpers;
 using System;
@@ -139,14 +140,157 @@ namespace YABOT.Features.OccultCrescent
         private const double LibraReapplySeconds = 110;
         private readonly Dictionary<ulong, DateTime> libraApplied = new();
 
-        // Sheet data resolved once per action (cast time for the moving check, range semantics).
-        private readonly record struct SheetInfo(bool HasCastTime, bool CanTargetHostile, byte EffectRange);
+        // Sheet data resolved once per action (cast time for the moving check, range semantics,
+        // icon for matching the duty action panel's buttons, name for logging, cooldown group
+        // for shared-cooldown handling).
+        private readonly record struct SheetInfo(bool HasCastTime, bool CanTargetHostile, byte EffectRange, ushort Icon, string Name, byte CooldownGroup);
         private readonly Dictionary<uint, SheetInfo> sheetCache = new();
 
         // Attempt throttle + post-use debounce so we don't spam UseAction every frame.
         private static readonly TimeSpan AttemptInterval = TimeSpan.FromMilliseconds(300);
         private static readonly TimeSpan UseDebounce = TimeSpan.FromMilliseconds(700);
         private DateTime nextAttempt = DateTime.MinValue;
+
+        // Last main-button action id written to the debug log.
+        private uint lastLoggedSelected = uint.MaxValue;
+
+        // Priority order: the panel's main-button action first, then the remaining slots. Within
+        // a shared-cooldown group this makes the rotated-in action win - once it fires, the whole
+        // group is on cooldown, so the others never race it.
+        private static int BuildOrder(DutyActionManager* dam, int slots, uint selected, Span<uint> order)
+        {
+            var count = 0;
+            if (selected != 0) order[count++] = selected;
+            for (var i = 0; i < slots; i++)
+            {
+                var id = dam->ActionId[i];
+                if (id != 0 && id != selected) order[count++] = id;
+            }
+            return count;
+        }
+
+        // GetActionStatus is unreliable for duty actions: it can stay 582 while the action is off
+        // cooldown and perfectly usable. The duty action system tracks the real cooldown in
+        // DutyActionManager's recast entries; those aren't reliably parallel to the action slots,
+        // so match them by the ActionId each RecastDetail records instead of by slot position.
+        // A recast entry only records the group member that was actually cast (verified in-game:
+        // casting Thunderstorm leaves Judgment Bolt/Hellfire without an entry), so an active
+        // entry also covers every action sharing its sheet cooldown group.
+        private bool IsOnCooldown(DutyActionManager* dam, uint actionId)
+        {
+            var group = GetSheetInfo(actionId).CooldownGroup;
+            for (var r = 0; r < 5; r++)
+            {
+                ref var rc = ref dam->Recast[r];
+                if (!rc.IsActive || rc.ActionId == 0 || rc.Elapsed >= rc.Total) continue;
+                if (rc.ActionId == actionId) return true;
+                if (group != 0 && GetSheetInfo(rc.ActionId).CooldownGroup == group) return true;
+            }
+            return false;
+        }
+
+        // True when another of the current duty actions shares this action's sheet cooldown
+        // group (e.g. the phantom summoner spells, all group 85). Group numbers are reused
+        // across jobs, so only the current slots are compared, never the whole action table.
+        private bool SharesCooldownWithOtherSlot(DutyActionManager* dam, int slots, uint actionId)
+        {
+            var group = GetSheetInfo(actionId).CooldownGroup;
+            if (group == 0) return false;
+            for (var i = 0; i < slots; i++)
+            {
+                var id = dam->ActionId[i];
+                if (id != 0 && id != actionId && GetSheetInfo(id).CooldownGroup == group)
+                    return true;
+            }
+            return false;
+        }
+
+        // Action name for log messages (falls back to the raw id for unknown rows).
+        private string ActionName(uint actionId) => actionId == 0 ? "none" : GetSheetInfo(actionId).Name;
+
+        // The duty action panel (_ActionContents) shows one enlarged "main" button the player can
+        // rotate actions into. In Occult Crescent the panel is the subtree under res node 16: one
+        // button res node per action (IDs 24/26/28/30/32), each wrapping a DragDrop component with
+        // the action's icon - the main button's res node is at scale 1.0, the small ones at ~0.7,
+        // locked/hidden ones lose their Visible flag. Nothing else tracks the rotation
+        // (AgentMKDSupportJob's SelectedAction and DutyActionManager.GetDutyActionId(0) both
+        // don't), so the selection is read straight off the addon: the visible DragDrop whose
+        // icon matches a duty action and whose accumulated scale is largest is the main button.
+        // Visibility must be checked up the whole parent chain: the regular two-slot duty action
+        // layout (subtree under res node 2) also contains DragDrop nodes at scale 1.0 and is
+        // merely invisible while the phantom layout is shown.
+        private uint GetSelectedAction(DutyActionManager* dam, int slots)
+        {
+            var addon = (AtkUnitBase*)Svc.GameGui.GetAddonByName("_ActionContents").Address;
+            if (addon == null || !addon->IsVisible) return 0;
+
+            // Icon -> action for the current duty actions (each action has a distinct icon).
+            Span<uint> candidateIds = stackalloc uint[5];
+            Span<ushort> candidateIcons = stackalloc ushort[5];
+            var candidates = 0;
+            for (var s = 0; s < slots; s++)
+            {
+                var id = dam->ActionId[s];
+                if (id == 0) continue;
+                var icon = GetSheetInfo(id).Icon;
+                if (icon == 0) continue;
+                candidateIds[candidates] = id;
+                candidateIcons[candidates] = icon;
+                candidates++;
+            }
+            if (candidates == 0) return 0;
+
+            var bestScale = 0f;
+            var bestAction = 0u;
+            for (var i = 0; i < addon->UldManager.NodeListCount; i++)
+            {
+                var node = addon->UldManager.NodeList[i];
+                if (node == null || (ushort)node->Type < 1000) continue; // components only
+
+                var component = ((AtkComponentNode*)node)->Component;
+                if (component == null) continue;
+                var objectInfo = (AtkUldComponentInfo*)component->UldManager.Objects;
+                if (objectInfo == null || objectInfo->ComponentType != ComponentType.DragDrop) continue;
+
+                var iconComponent = ((AtkComponentDragDrop*)component)->AtkComponentIcon;
+                if (iconComponent == null) continue;
+
+                var actionId = 0u;
+                for (var c = 0; c < candidates; c++)
+                {
+                    if (candidateIcons[c] == iconComponent->IconId)
+                    {
+                        actionId = candidateIds[c];
+                        break;
+                    }
+                }
+                if (actionId == 0) continue;
+
+                // The per-button res node carries the 0.7/1.0 scale; accumulating up the parent
+                // chain picks it up regardless of how deep the DragDrop node is nested under it,
+                // and any invisible ancestor disqualifies the button (hidden layout/locked slot).
+                var scale = 1f;
+                var visible = true;
+                for (var n = (AtkResNode*)node; n != null; n = n->ParentNode)
+                {
+                    if ((n->NodeFlags & NodeFlags.Visible) == 0)
+                    {
+                        visible = false;
+                        break;
+                    }
+                    scale *= n->ScaleX;
+                }
+                if (!visible) continue;
+
+                if (scale > bestScale)
+                {
+                    bestScale = scale;
+                    bestAction = actionId;
+                }
+            }
+
+            return bestAction;
+        }
 
         public override void Enable()
         {
@@ -171,6 +315,22 @@ namespace YABOT.Features.OccultCrescent
 
                 if (!ZoneHelper.IsOccultCrescent()) return;
                 if (Svc.Condition[ConditionFlag.BetweenAreas] || Svc.Condition[ConditionFlag.BetweenAreas51]) return;
+
+                var dam = DutyActionManager.GetInstanceIfReady();
+                if (dam == null || !dam->ActionsPresent) return;
+
+                var slots = Math.Min((int)dam->NumValidSlots, 5);
+
+                // Try the panel's main-button action first so that within a shared-cooldown group
+                // (e.g. the phantom summoner spells) the one the player rotated in wins - once it
+                // fires, the whole group is on cooldown, so the others never race it.
+                var selected = GetSelectedAction(dam, slots);
+                if (selected != lastLoggedSelected)
+                {
+                    lastLoggedSelected = selected;
+                    Log($"duty action panel main button: {ActionName(selected)}");
+                }
+
                 if (!Svc.Condition[ConditionFlag.InCombat]) return;
                 if (Svc.Condition[ConditionFlag.Mounted]) return;
 
@@ -183,33 +343,16 @@ namespace YABOT.Features.OccultCrescent
                 if ((byte)target.SubKind != 5) return;
                 if (target.IsDead || target.CurrentHp == 0 || !target.IsTargetable) return;
 
-                var dam = DutyActionManager.GetInstanceIfReady();
-                if (dam == null || !dam->ActionsPresent) return;
-
                 var am = ActionManager.Instance();
-                var slots = Math.Min((int)dam->NumValidSlots, 5);
 
-                for (var i = 0; i < slots; i++)
+                Span<uint> order = stackalloc uint[6];
+                var count = BuildOrder(dam, slots, selected, order);
+
+                for (var i = 0; i < count; i++)
                 {
-                    var actionId = dam->ActionId[i];
-                    if (actionId == 0 || !Actions.TryGetValue(actionId, out var entry)) continue;
-
-                    // GetActionStatus is unreliable for duty actions: it can stay 582 while the
-                    // action is off cooldown and perfectly usable. The duty action system tracks
-                    // the real cooldown in DutyActionManager's recast entries; those aren't
-                    // reliably parallel to the action slots, so match them by the ActionId each
-                    // RecastDetail records instead of by slot position.
-                    var onCooldown = false;
-                    for (var r = 0; r < 5; r++)
-                    {
-                        ref var rc = ref dam->Recast[r];
-                        if (rc.ActionId == actionId && rc.IsActive && rc.Elapsed < rc.Total)
-                        {
-                            onCooldown = true;
-                            break;
-                        }
-                    }
-                    if (onCooldown) continue;
+                    var actionId = order[i];
+                    if (!Actions.TryGetValue(actionId, out var entry)) continue;
+                    if (IsOnCooldown(dam, actionId)) continue;
 
                     var info = GetSheetInfo(actionId);
 
@@ -218,10 +361,20 @@ namespace YABOT.Features.OccultCrescent
 
                     if (!Eligible(entry, actionId, info, player, target)) continue;
 
+                    // Within a shared-cooldown group, only ever attempt the panel's main-button
+                    // action. Attempting the other members too (as the code originally did, in
+                    // slot order) is what cast the wrong spell: an attempt landing in the game's
+                    // action-queue window (~0.5s before the shared cooldown ends) queues THAT
+                    // member, which then fires at ready ahead of the intended one. When the main
+                    // button holds an action this feature never uses (e.g. Earthen Wall), the
+                    // group is left alone for manual use.
+                    if (actionId != selected && SharesCooldownWithOtherSlot(dam, slots, actionId))
+                        continue;
+
                     var targetId = entry.Kind == Kind.Buff ? player.GameObjectId : target.GameObjectId;
                     if (am->UseAction(ActionType.Action, actionId, targetId))
                     {
-                        Log($"used {actionId}");
+                        Log($"used {ActionName(actionId)} (main button {ActionName(selected)})");
                         if (actionId == LibraActionId)
                             libraApplied[target.GameObjectId] = now;
                         nextAttempt = now + UseDebounce;
@@ -304,9 +457,9 @@ namespace YABOT.Features.OccultCrescent
         {
             if (sheetCache.TryGetValue(actionId, out var cached)) return cached;
 
-            var info = new SheetInfo(false, true, 0);
+            var info = new SheetInfo(false, true, 0, 0, actionId.ToString(), 0);
             if (Svc.Data.GetExcelSheet<Lumina.Excel.Sheets.Action>().TryGetRow(actionId, out var row))
-                info = new SheetInfo(row.Cast100ms > 0, row.CanTargetHostile, row.EffectRange);
+                info = new SheetInfo(row.Cast100ms > 0, row.CanTargetHostile, row.EffectRange, row.Icon, row.Name.ExtractText(), row.CooldownGroup);
 
             sheetCache[actionId] = info;
             return info;
