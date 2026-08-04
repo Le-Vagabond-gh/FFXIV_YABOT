@@ -29,6 +29,15 @@ namespace YABOT.Features.OccultCrescent
             "Heals and utility actions are never used.";
 
         public override FeatureType FeatureType => FeatureType.OccultCrescent;
+        public override bool UseAutoConfig => true;
+
+        public class Configs : FeatureConfig
+        {
+            [FeatureConfigOption("Use self-Doom Necromancer spells while Aurora (GNB) is on you, casting Aurora first if needed")]
+            public bool UseDoomSpellsWithAurora = false;
+        }
+
+        public Configs Config { get; private set; } = null!;
 
         private enum Kind
         {
@@ -39,7 +48,9 @@ namespace YABOT.Features.OccultCrescent
 
         // NotOnBosses: skipped against boss-rank targets (level "??"), where the action's effect
         // (instant kill, %HP damage, hard crowd control) doesn't work "with some exceptions".
-        private readonly record struct Entry(Kind Kind, uint[] Statuses, bool NotOnBosses = false);
+        // SelfDoom: afflicts the caster with Doom (fatal unless healed back to full HP within
+        // 10s) - only used with the Aurora config option, while Aurora's regen is on the player.
+        private readonly record struct Entry(Kind Kind, uint[] Statuses, bool NotOnBosses = false, bool SelfDoom = false);
 
         private static readonly uint[] None = Array.Empty<uint>();
 
@@ -104,9 +115,12 @@ namespace YABOT.Features.OccultCrescent
             [49095] = new(Kind.Damage, None), // Occult Blizzard II
             [49096] = new(Kind.Damage, None), // Occult Thunder II
             [49097] = new(Kind.Damage, None), // Drain Touch
-            // Deep Freeze (49098), Hell Wind (49099), Chaos Drive (49100) and Doomsday (49101)
-            // deliberately excluded: they afflict the caster with Doom (fatal unless healed back
-            // to full HP within 10s) - too dangerous to fire automatically.
+            // SelfDoom spells: too dangerous to fire unconditionally; only used with the Aurora
+            // config option, while Aurora's regen guarantees getting healed back to full.
+            [49098] = new(Kind.Damage, None, SelfDoom: true), // Deep Freeze
+            [49099] = new(Kind.Damage, None, SelfDoom: true), // Hell Wind
+            [49100] = new(Kind.Damage, None, SelfDoom: true), // Chaos Drive
+            [49101] = new(Kind.Damage, None, SelfDoom: true), // Doomsday (consumes 10% max HP; dispel bonus fizzles on bosses)
 
             // --- Debuffs (blocked while the target already has the status, from any source) ---
             [41621] = new(Kind.Debuff, new uint[] { 427, 1568 }, NotOnBosses: true), // Occult Slowga -> Slow+
@@ -132,6 +146,24 @@ namespace YABOT.Features.OccultCrescent
             [49066] = new(Kind.Buff, new uint[] { 4873 }),        // Image
             // Occult Mighty Guard (49088) deliberately excluded: defensive cooldown, not worth burning automatically.
         };
+
+        // Aurora (GNB, action 16151): heal over time that restores the player to full HP, which
+        // is what dispels the self-inflicted Doom. Status 1835 is the standard buff, 2065 an
+        // alternate id the game uses in some contexts.
+        private const uint AuroraActionId = 16151;
+        private static readonly uint[] AuroraStatuses = { 1835, 2065 };
+
+        // Catharsis of Corundum (GNB, from Heart of Corundum): heals ~30% max HP when the effect
+        // expires (or when HP drops below 50%). If it expires within the Doom window, that heal
+        // tops the player back to full and cleanses the Doom, so it covers a Doom spell the same
+        // way Aurora does. One second of safety margin against Doom's 10s timer.
+        private static readonly uint[] CatharsisStatuses = { 2685, 4296 };
+        private const float DoomDurationSeconds = 10f;
+
+        private static bool CatharsisCoversDoom(IPlayerCharacter player) =>
+            player.StatusList.Any(s => CatharsisStatuses.Contains(s.StatusId)
+                                       && s.RemainingTime > 0
+                                       && s.RemainingTime <= DoomDurationSeconds - 1);
 
         // Occult Libra applies no visible status, so reapplication is gated by a per-target timer
         // slightly under its 120s duration.
@@ -293,6 +325,7 @@ namespace YABOT.Features.OccultCrescent
 
         public override void Enable()
         {
+            Config = LoadConfig<Configs>() ?? new Configs();
             libraApplied.Clear();
             Svc.Framework.Update += OnFrameworkUpdate;
             base.Enable();
@@ -300,6 +333,7 @@ namespace YABOT.Features.OccultCrescent
 
         public override void Disable()
         {
+            SaveConfig(Config);
             Svc.Framework.Update -= OnFrameworkUpdate;
             base.Disable();
         }
@@ -369,6 +403,30 @@ namespace YABOT.Features.OccultCrescent
                     // group is left alone for manual use.
                     if (actionId != selected && SharesCooldownWithOtherSlot(dam, slots, actionId))
                         continue;
+
+                    // Self-Doom spells only fire while Aurora's regen is on the player (opt-in),
+                    // and only from 95%+ HP: the spell costs 10% max HP on top, and the Doom is
+                    // only cleansed by getting back to FULL HP within 10s - from lower HP one
+                    // Aurora may not make it. When Aurora isn't up, cast it on self first - the
+                    // spell follows next tick. Checked last so Aurora is only burned when the
+                    // spell would actually fire.
+                    if (entry.SelfDoom)
+                    {
+                        if (!Config.UseDoomSpellsWithAurora) continue;
+                        if (player.CurrentHp * 100u < player.MaxHp * 95u) continue;
+                        if (!HasAnyStatus(player, AuroraStatuses) && !CatharsisCoversDoom(player))
+                        {
+                            // GetActionStatus filters out non-GNB players and spent charges.
+                            if (am->GetActionStatus(ActionType.Action, AuroraActionId) != 0) continue;
+                            if (am->UseAction(ActionType.Action, AuroraActionId, player.GameObjectId))
+                            {
+                                Log($"used Aurora ahead of {ActionName(actionId)}");
+                                nextAttempt = now + UseDebounce;
+                                return; // one action per tick
+                            }
+                            continue;
+                        }
+                    }
 
                     var targetId = entry.Kind == Kind.Buff ? player.GameObjectId : target.GameObjectId;
                     if (am->UseAction(ActionType.Action, actionId, targetId))
