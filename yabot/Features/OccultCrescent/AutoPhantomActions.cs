@@ -104,10 +104,9 @@ namespace YABOT.Features.OccultCrescent
             [49095] = new(Kind.Damage, None), // Occult Blizzard II
             [49096] = new(Kind.Damage, None), // Occult Thunder II
             [49097] = new(Kind.Damage, None), // Drain Touch
-            [49098] = new(Kind.Damage, None), // Deep Freeze
-            [49099] = new(Kind.Damage, None), // Hell Wind
-            [49100] = new(Kind.Damage, None), // Chaos Drive
-            [49101] = new(Kind.Damage, None), // Doomsday (consumes 10% max HP; dispel bonus fizzles on bosses)
+            // Deep Freeze (49098), Hell Wind (49099), Chaos Drive (49100) and Doomsday (49101)
+            // deliberately excluded: they afflict the caster with Doom (fatal unless healed back
+            // to full HP within 10s) - too dangerous to fire automatically.
 
             // --- Debuffs (blocked while the target already has the status, from any source) ---
             [41621] = new(Kind.Debuff, new uint[] { 427, 1568 }, NotOnBosses: true), // Occult Slowga -> Slow+
