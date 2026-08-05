@@ -33,7 +33,14 @@ namespace YABOT.Features.OccultCrescent
 
         public class Configs : FeatureConfig
         {
-            [FeatureConfigOption("Use self-Doom Necromancer spells while Aurora (GNB) is on you, casting Aurora first if needed")]
+            [FeatureConfigOption("Use self-Doom Necromancer spells (GNB)", HelpText =
+                "Deep Freeze, Hell Wind, Chaos Drive and Doomsday afflict you with Doom, which is only " +
+                "cleansed by getting healed back to full HP within 10 seconds.\n\n" +
+                "With this enabled they are used when you are above 95% HP and a heal is guaranteed to " +
+                "cover the Doom: either Aurora's regen is on you (Aurora is cast on you first when it " +
+                "isn't), or Catharsis of Corundum will expire within the Doom window and its expiration " +
+                "heal tops you back to full.\n\n" +
+                "Heart of Corundum is also kept on cooldown so a Catharsis window cycles regularly.")]
             public bool UseDoomSpellsWithAurora = false;
         }
 
@@ -164,6 +171,19 @@ namespace YABOT.Features.OccultCrescent
             player.StatusList.Any(s => CatharsisStatuses.Contains(s.StatusId)
                                        && s.RemainingTime > 0
                                        && s.RemainingTime <= DoomDurationSeconds - 1);
+
+        // Heart of Corundum (GNB, action 25758) grants Catharsis of Corundum; kept on cooldown
+        // (25s recast, 20s Catharsis) while the self-Doom option is active so a Catharsis expiry
+        // window cycles regularly.
+        private const uint HeartOfCorundumActionId = 25758;
+
+        private static bool HasSelfDoomDutyAction(DutyActionManager* dam, int slots)
+        {
+            for (var i = 0; i < slots; i++)
+                if (Actions.TryGetValue(dam->ActionId[i], out var entry) && entry.SelfDoom)
+                    return true;
+            return false;
+        }
 
         // Occult Libra applies no visible status, so reapplication is gated by a per-target timer
         // slightly under its 120s duration.
@@ -377,6 +397,20 @@ namespace YABOT.Features.OccultCrescent
                 if (target.IsDead || target.CurrentHp == 0 || !target.IsTargetable) return;
 
                 var am = ActionManager.Instance();
+
+                // Keep Heart of Corundum rolling ahead of duty actions while the self-Doom
+                // option is active and the phantom job actually has a self-Doom action, so
+                // Catharsis of Corundum expiry windows keep cycling. GetActionStatus filters
+                // out non-GNB players and the ability being on cooldown.
+                if (Config.UseDoomSpellsWithAurora
+                    && HasSelfDoomDutyAction(dam, slots)
+                    && am->GetActionStatus(ActionType.Action, HeartOfCorundumActionId) == 0
+                    && am->UseAction(ActionType.Action, HeartOfCorundumActionId, player.GameObjectId))
+                {
+                    Log("used Heart of Corundum");
+                    nextAttempt = now + UseDebounce;
+                    return;
+                }
 
                 Span<uint> order = stackalloc uint[6];
                 var count = BuildOrder(dam, slots, selected, order);

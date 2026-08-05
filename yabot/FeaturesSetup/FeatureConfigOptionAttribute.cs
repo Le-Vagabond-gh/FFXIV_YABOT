@@ -13,6 +13,10 @@ namespace YABOT.FeaturesSetup
 
         public bool Disabled { get; set; } = false;
 
+        /// <summary>Optional help text shown as a (?) hover marker next to the option, so long
+        /// explanations don't stretch the settings window (labels don't wrap).</summary>
+        public string? HelpText { get; set; }
+
         public int Priority { get; } = 0;
         public int EditorSize { get; set; } = -1;
 

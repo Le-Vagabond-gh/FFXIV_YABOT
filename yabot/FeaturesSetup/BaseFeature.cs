@@ -253,6 +253,12 @@ public abstract class BaseFeature
                     ImGui.Text($"Invalid Auto Field Type: {f.Name}");
                 }
 
+                if (!string.IsNullOrEmpty(attr.HelpText))
+                {
+                    ImGui.SameLine();
+                    ImGuiComponents.HelpMarker(attr.HelpText);
+                }
+
                 if (attr.Disabled)
                 {
                     ImGui.EndDisabled();
