@@ -240,20 +240,26 @@ namespace YABOT.Features.OccultCrescent
             return false;
         }
 
-        // True when another of the current duty actions shares this action's sheet cooldown
-        // group (e.g. the phantom summoner spells, all group 85). Group numbers are reused
+        // Within a shared-cooldown group only one member is ever attempted, to avoid the
+        // action-queue race described at the call site. The representative is the panel's
+        // main-button action when it belongs to the group (the player's rotation choice wins),
+        // otherwise the first group member in slot order. Groups are independent per pair -
+        // e.g. cannoneer has Holy+Silver in one group and Dark+Shock in another, so the pair
+        // without the main button still fires through its first slot. Group numbers are reused
         // across jobs, so only the current slots are compared, never the whole action table.
-        private bool SharesCooldownWithOtherSlot(DutyActionManager* dam, int slots, uint actionId)
+        private bool IsGroupRepresentative(DutyActionManager* dam, int slots, uint actionId, uint selected)
         {
             var group = GetSheetInfo(actionId).CooldownGroup;
-            if (group == 0) return false;
+            if (group == 0) return true;
+            if (selected != 0 && GetSheetInfo(selected).CooldownGroup == group)
+                return actionId == selected;
             for (var i = 0; i < slots; i++)
             {
                 var id = dam->ActionId[i];
-                if (id != 0 && id != actionId && GetSheetInfo(id).CooldownGroup == group)
-                    return true;
+                if (id != 0 && GetSheetInfo(id).CooldownGroup == group)
+                    return id == actionId;
             }
-            return false;
+            return true;
         }
 
         // Action name for log messages (falls back to the raw id for unknown rows).
@@ -428,14 +434,14 @@ namespace YABOT.Features.OccultCrescent
 
                     if (!Eligible(entry, actionId, info, player, target)) continue;
 
-                    // Within a shared-cooldown group, only ever attempt the panel's main-button
-                    // action. Attempting the other members too (as the code originally did, in
-                    // slot order) is what cast the wrong spell: an attempt landing in the game's
-                    // action-queue window (~0.5s before the shared cooldown ends) queues THAT
-                    // member, which then fires at ready ahead of the intended one. When the main
-                    // button holds an action this feature never uses (e.g. Earthen Wall), the
-                    // group is left alone for manual use.
-                    if (actionId != selected && SharesCooldownWithOtherSlot(dam, slots, actionId))
+                    // Within a shared-cooldown group, only ever attempt one member (see
+                    // IsGroupRepresentative). Attempting the other members too (as the code
+                    // originally did, in slot order) is what cast the wrong spell: an attempt
+                    // landing in the game's action-queue window (~0.5s before the shared
+                    // cooldown ends) queues THAT member, which then fires at ready ahead of
+                    // the intended one. When the main button holds an action this feature
+                    // never uses (e.g. Earthen Wall), its group is left alone for manual use.
+                    if (!IsGroupRepresentative(dam, slots, actionId, selected))
                         continue;
 
                     // Self-Doom spells only fire while Aurora's regen is on the player (opt-in),
