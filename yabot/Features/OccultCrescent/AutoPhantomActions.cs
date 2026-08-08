@@ -135,7 +135,9 @@ namespace YABOT.Features.OccultCrescent
             [41649] = new(Kind.Debuff, new uint[] { 4279 }),      // Pilfer Weapon -> Weapon Pilfered
             [46605] = new(Kind.Debuff, new uint[] { 4802 }, NotOnBosses: true), // Mesmerize -> Mesmerized
             [49075] = new(Kind.Debuff, new uint[] { 5317 }, NotOnBosses: true), // Occult Toad
-            [49094] = new(Kind.Debuff, None),                     // Occult Libra (hidden status - internal timer below)
+            // Occult Libra applies whichever of the four elemental weaknesses the target actually has,
+            // so gate on all of them - that also picks up a Libra cast by anyone else in the party.
+            [49094] = new(Kind.Debuff, new uint[] { 5322, 5323, 5324, 5325 }), // Fire/Ice/Lightning/Wind Weakness
 
             // --- Buffs (blocked while the player already has the status, from any source) ---
             [41588] = new(Kind.Buff, new uint[] { 4231 }),        // Phantom Guard
@@ -185,11 +187,15 @@ namespace YABOT.Features.OccultCrescent
             return false;
         }
 
-        // Occult Libra applies no visible status, so reapplication is gated by a per-target timer
-        // slightly under its 120s duration.
+        // The weakness statuses above are the primary gate; this timer is a second one, kept for two
+        // cases the status check can't cover. The status takes a server round-trip to land, which can
+        // outrun the 700ms use debounce and let a second cast slip out; and if an enemy ever turns out
+        // to have no elemental affinity at all, no status appears and the status check would never
+        // block. Threshold sits slightly under Libra's 120s duration.
         private const uint LibraActionId = 49094;
         private const double LibraReapplySeconds = 110;
         private readonly Dictionary<ulong, DateTime> libraApplied = new();
+        private bool wasInCombat;
 
         // Sheet data resolved once per action (cast time for the moving check, range semantics,
         // icon for matching the duty action panel's buttons, name for logging, cooldown group
@@ -353,6 +359,7 @@ namespace YABOT.Features.OccultCrescent
         {
             Config = LoadConfig<Configs>() ?? new Configs();
             libraApplied.Clear();
+            wasInCombat = false;
             Svc.Framework.Update += OnFrameworkUpdate;
             base.Enable();
         }
@@ -372,6 +379,14 @@ namespace YABOT.Features.OccultCrescent
                 if (now < nextAttempt) return;
                 nextAttempt = now + AttemptInterval;
 
+                // Libra's per-target timers only mean anything within the fight they were recorded in,
+                // so drop them when combat ends. Keeps the map from growing all session and stops a
+                // recycled GameObjectId from inheriting a stale timestamp. Checked ahead of the zone
+                // gate so leaving Occult Crescent mid-session doesn't strand the entries.
+                var inCombat = Svc.Condition[ConditionFlag.InCombat];
+                if (wasInCombat && !inCombat) libraApplied.Clear();
+                wasInCombat = inCombat;
+
                 if (!ZoneHelper.IsOccultCrescent()) return;
                 if (Svc.Condition[ConditionFlag.BetweenAreas] || Svc.Condition[ConditionFlag.BetweenAreas51]) return;
 
@@ -390,7 +405,7 @@ namespace YABOT.Features.OccultCrescent
                     Log($"duty action panel main button: {ActionName(selected)}");
                 }
 
-                if (!Svc.Condition[ConditionFlag.InCombat]) return;
+                if (!inCombat) return;
                 if (Svc.Condition[ConditionFlag.Mounted]) return;
 
                 if (Svc.Objects.LocalPlayer is not { } player || player.IsDead || player.CurrentHp == 0) return;
@@ -509,16 +524,12 @@ namespace YABOT.Features.OccultCrescent
                     return !HasAnyStatus(player, entry.Statuses);
 
                 case Kind.Debuff:
-                    if (actionId == LibraActionId)
-                    {
-                        if (libraApplied.TryGetValue(target.GameObjectId, out var applied)
-                            && (DateTime.Now - applied).TotalSeconds < LibraReapplySeconds)
-                            return false;
-                    }
-                    else if (HasAnyStatus(target, entry.Statuses))
-                    {
+                    if (HasAnyStatus(target, entry.Statuses)) return false;
+                    // Libra additionally honours its own timer - see LibraReapplySeconds.
+                    if (actionId == LibraActionId
+                        && libraApplied.TryGetValue(target.GameObjectId, out var applied)
+                        && (DateTime.Now - applied).TotalSeconds < LibraReapplySeconds)
                         return false;
-                    }
                     return InRange(actionId, player, target);
 
                 case Kind.Damage:
