@@ -19,6 +19,8 @@ namespace YABOT.Features.OccultCrescent
     // hardcoded (OC-specific, the set never grows outside patches): damage actions on cooldown,
     // debuffs when the target doesn't already carry the debuff, buffs when the buff isn't already
     // active on the player. Heals, movement and out-of-combat utility are deliberately excluded.
+    // Jobs holding Occult Libra reveal the target's elemental weakness first and then spend their
+    // shared elemental cooldown on the spell that weakness boosts - see PlanElemental.
     public unsafe class AutoPhantomActions : BaseFeature
     {
         public override string Name => "Auto Phantom Actions";
@@ -26,7 +28,9 @@ namespace YABOT.Features.OccultCrescent
         public override string Description =>
             "In Occult Crescent, automatically uses your phantom job's duty actions while in combat with an enemy targeted: " +
             "damage actions on cooldown, debuffs when the target isn't already afflicted, buffs when the buff isn't already active. " +
-            "Heals and utility actions are never used.";
+            "Heals and utility actions are never used.\n\n" +
+            "Occult Libra is cast first to reveal the target's elemental weakness, and the elemental spell matching that " +
+            "weakness is then the one used - taking priority over whichever action sits on the panel's main button.";
 
         public override FeatureType FeatureType => FeatureType.OccultCrescent;
         public override bool UseAutoConfig => true;
@@ -197,10 +201,76 @@ namespace YABOT.Features.OccultCrescent
         private readonly Dictionary<ulong, DateTime> libraApplied = new();
         private bool wasInCombat;
 
+        // Libra's weakness statuses, mapped to the element ids the Action sheet's Aspect column
+        // uses (1 fire, 2 ice, 3 wind, 5 lightning). Matching a revealed weakness to a spell goes
+        // through these instead of a hardcoded per-job spell list, so it covers every phantom job
+        // with aspected spells - red mage casts its own Libra, black mage / summoner / necromancer
+        // pick up a weakness applied by anyone else in the party.
+        private static readonly Dictionary<uint, byte> WeaknessAspects = new()
+        {
+            [5322] = 1, // Fire Weakness
+            [5323] = 2, // Ice Weakness
+            [5324] = 5, // Lightning Weakness
+            [5325] = 3, // Wind Weakness
+        };
+
+        private static bool IsWeaknessAspect(byte aspect) => WeaknessAspects.ContainsValue(aspect);
+
+        private static byte WeaknessAspect(IBattleNpc target)
+        {
+            foreach (var status in target.StatusList)
+                if (WeaknessAspects.TryGetValue(status.StatusId, out var aspect))
+                    return aspect;
+            return 0;
+        }
+
+        private static bool HasSlotAction(DutyActionManager* dam, int slots, uint actionId)
+        {
+            for (var i = 0; i < slots; i++)
+                if (dam->ActionId[i] == actionId) return true;
+            return false;
+        }
+
+        // How long to wait for the weakness status after Libra was used, before concluding the
+        // target has no elemental affinity at all. Covers the server round-trip.
+        private const double LibraPendingSeconds = 2;
+
+        // Priority = the action that must win this tick regardless of the panel's main button;
+        // HoldAspected = don't spend the shared elemental cooldown yet.
+        private readonly record struct ElementalPlan(uint Priority, bool HoldAspected);
+
+        // A phantom job's elemental spells all share one cooldown group (red mage's Fire/Blizzard/
+        // Thunder II are group 83, summoner's Hellfire/Judgment Bolt/Thunderstorm group 85), so
+        // only one of them goes off per cycle and it should be the one the weakness boosts. While
+        // the weakness is still unknown Libra goes first, and the aspected spells hold so the
+        // cooldown isn't burned on an unboosted element - unless Libra already landed and nothing
+        // came back, which means the target has no affinity and the hold would block damage
+        // forever.
+        private ElementalPlan PlanElemental(DutyActionManager* dam, int slots, IBattleNpc target, DateTime now)
+        {
+            var aspect = WeaknessAspect(target);
+
+            if (aspect == 0)
+            {
+                if (!HasSlotAction(dam, slots, LibraActionId)) return default;
+                var pending = !libraApplied.TryGetValue(target.GameObjectId, out var applied)
+                              || (now - applied).TotalSeconds < LibraPendingSeconds;
+                return new ElementalPlan(LibraActionId, pending);
+            }
+
+            for (var i = 0; i < slots; i++)
+            {
+                var id = dam->ActionId[i];
+                if (id != 0 && Actions.ContainsKey(id) && GetSheetInfo(id).Aspect == aspect)
+                    return new ElementalPlan(id, false);
+            }
+            return default; // weakness revealed, but no spell of that element slotted
+        }
+
         // Sheet data resolved once per action (cast time for the moving check, range semantics,
         // icon for matching the duty action panel's buttons, name for logging, cooldown group
-        // for shared-cooldown handling).
-        private readonly record struct SheetInfo(bool HasCastTime, bool CanTargetHostile, byte EffectRange, ushort Icon, string Name, byte CooldownGroup);
+        // for shared-cooldown handling, aspect for elemental weakness matching).
+        private readonly record struct SheetInfo(bool HasCastTime, bool CanTargetHostile, byte EffectRange, ushort Icon, string Name, byte CooldownGroup, byte Aspect);
         private readonly Dictionary<uint, SheetInfo> sheetCache = new();
 
         // Attempt throttle + post-use debounce so we don't spam UseAction every frame.
@@ -211,17 +281,19 @@ namespace YABOT.Features.OccultCrescent
         // Last main-button action id written to the debug log.
         private uint lastLoggedSelected = uint.MaxValue;
 
-        // Priority order: the panel's main-button action first, then the remaining slots. Within
-        // a shared-cooldown group this makes the rotated-in action win - once it fires, the whole
+        // Priority order: the elemental plan's action (Libra, or the weakness-matching spell) ahead
+        // of everything, then the panel's main-button action, then the remaining slots. Within a
+        // shared-cooldown group this makes the rotated-in action win - once it fires, the whole
         // group is on cooldown, so the others never race it.
-        private static int BuildOrder(DutyActionManager* dam, int slots, uint selected, Span<uint> order)
+        private static int BuildOrder(DutyActionManager* dam, int slots, uint selected, uint priority, Span<uint> order)
         {
             var count = 0;
-            if (selected != 0) order[count++] = selected;
+            if (priority != 0) order[count++] = priority;
+            if (selected != 0 && selected != priority) order[count++] = selected;
             for (var i = 0; i < slots; i++)
             {
                 var id = dam->ActionId[i];
-                if (id != 0 && id != selected) order[count++] = id;
+                if (id != 0 && id != selected && id != priority) order[count++] = id;
             }
             return count;
         }
@@ -253,10 +325,14 @@ namespace YABOT.Features.OccultCrescent
         // e.g. cannoneer has Holy+Silver in one group and Dark+Shock in another, so the pair
         // without the main button still fires through its first slot. Group numbers are reused
         // across jobs, so only the current slots are compared, never the whole action table.
-        private bool IsGroupRepresentative(DutyActionManager* dam, int slots, uint actionId, uint selected)
+        private bool IsGroupRepresentative(DutyActionManager* dam, int slots, uint actionId, uint selected, uint priority)
         {
             var group = GetSheetInfo(actionId).CooldownGroup;
             if (group == 0) return true;
+            // The weakness-matching spell outranks the main button: the group only fires once per
+            // cooldown either way, and the boosted element is always the better spend.
+            if (priority != 0 && GetSheetInfo(priority).CooldownGroup == group)
+                return actionId == priority;
             if (selected != 0 && GetSheetInfo(selected).CooldownGroup == group)
                 return actionId == selected;
             for (var i = 0; i < slots; i++)
@@ -433,8 +509,10 @@ namespace YABOT.Features.OccultCrescent
                     return;
                 }
 
-                Span<uint> order = stackalloc uint[6];
-                var count = BuildOrder(dam, slots, selected, order);
+                var plan = PlanElemental(dam, slots, target, now);
+
+                Span<uint> order = stackalloc uint[7];
+                var count = BuildOrder(dam, slots, selected, plan.Priority, order);
 
                 for (var i = 0; i < count; i++)
                 {
@@ -443,6 +521,10 @@ namespace YABOT.Features.OccultCrescent
                     if (IsOnCooldown(dam, actionId)) continue;
 
                     var info = GetSheetInfo(actionId);
+
+                    // Hold aspected spells until Libra has revealed which element to spend the
+                    // shared cooldown on (Libra itself is unaspected, so it still gets through).
+                    if (plan.HoldAspected && IsWeaknessAspect(info.Aspect)) continue;
 
                     // A hardcast would be cancelled instantly while moving - skip until stationary.
                     if (info.HasCastTime && AgentMap.Instance()->IsPlayerMoving) continue;
@@ -456,7 +538,7 @@ namespace YABOT.Features.OccultCrescent
                     // cooldown ends) queues THAT member, which then fires at ready ahead of
                     // the intended one. When the main button holds an action this feature
                     // never uses (e.g. Earthen Wall), its group is left alone for manual use.
-                    if (!IsGroupRepresentative(dam, slots, actionId, selected))
+                    if (!IsGroupRepresentative(dam, slots, actionId, selected, plan.Priority))
                         continue;
 
                     // Self-Doom spells only fire while Aurora's regen is on the player (opt-in),
@@ -486,7 +568,8 @@ namespace YABOT.Features.OccultCrescent
                     var targetId = entry.Kind == Kind.Buff ? player.GameObjectId : target.GameObjectId;
                     if (am->UseAction(ActionType.Action, actionId, targetId))
                     {
-                        Log($"used {ActionName(actionId)} (main button {ActionName(selected)})");
+                        var tag = actionId == plan.Priority && actionId != LibraActionId ? " [weakness match]" : "";
+                        Log($"used {ActionName(actionId)}{tag} (main button {ActionName(selected)})");
                         if (actionId == LibraActionId)
                             libraApplied[target.GameObjectId] = now;
                         nextAttempt = now + UseDebounce;
@@ -565,9 +648,9 @@ namespace YABOT.Features.OccultCrescent
         {
             if (sheetCache.TryGetValue(actionId, out var cached)) return cached;
 
-            var info = new SheetInfo(false, true, 0, 0, actionId.ToString(), 0);
+            var info = new SheetInfo(false, true, 0, 0, actionId.ToString(), 0, 0);
             if (Svc.Data.GetExcelSheet<Lumina.Excel.Sheets.Action>().TryGetRow(actionId, out var row))
-                info = new SheetInfo(row.Cast100ms > 0, row.CanTargetHostile, row.EffectRange, row.Icon, row.Name.ExtractText(), row.CooldownGroup);
+                info = new SheetInfo(row.Cast100ms > 0, row.CanTargetHostile, row.EffectRange, row.Icon, row.Name.ExtractText(), row.CooldownGroup, row.Aspect);
 
             sheetCache[actionId] = info;
             return info;
