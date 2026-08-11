@@ -28,7 +28,8 @@ namespace YABOT.Features.OccultCrescent
         public override string Description =>
             "In Occult Crescent, automatically uses your phantom job's duty actions while in combat with an enemy targeted: " +
             "damage actions on cooldown, debuffs when the target isn't already afflicted, buffs when the buff isn't already active. " +
-            "Heals and utility actions are never used.\n\n" +
+            "Heals and utility actions are never used, and neither are Occult Toad or Starfall - they are left for you " +
+            "to place manually. Zeninage is only used on bosses so it doesn't spend your Occult Coffers on trash.\n\n" +
             "Occult Libra is cast first to reveal the target's elemental weakness, and the elemental spell matching that " +
             "weakness is then the one used - taking priority over whichever action sits on the panel's main button.";
 
@@ -59,9 +60,11 @@ namespace YABOT.Features.OccultCrescent
 
         // NotOnBosses: skipped against boss-rank targets (level "??"), where the action's effect
         // (instant kill, %HP damage, hard crowd control) doesn't work "with some exceptions".
+        // BossesOnly: the inverse - the action costs a limited resource, so it's held for
+        // boss-rank targets instead of being spent on trash.
         // SelfDoom: afflicts the caster with Doom (fatal unless healed back to full HP within
         // 10s) - only used with the Aurora config option, while Aurora's regen is on the player.
-        private readonly record struct Entry(Kind Kind, uint[] Statuses, bool NotOnBosses = false, bool SelfDoom = false);
+        private readonly record struct Entry(Kind Kind, uint[] Statuses, bool NotOnBosses = false, bool BossesOnly = false, bool SelfDoom = false);
 
         private static readonly uint[] None = Array.Empty<uint>();
 
@@ -74,7 +77,7 @@ namespace YABOT.Features.OccultCrescent
             [41595] = new(Kind.Damage, None), // Phantom Kick
             [41596] = new(Kind.Damage, None), // Occult Counter (only ready right after a parry)
             [41605] = new(Kind.Damage, None), // Iainuki (kill proc fizzles on bosses, potency still applies)
-            [41606] = new(Kind.Damage, None), // Zeninage (consumes an Occult Coffer per use)
+            [41606] = new(Kind.Damage, None, BossesOnly: true), // Zeninage (consumes an Occult Coffer per use - held for bosses)
             [41623] = new(Kind.Damage, None), // Occult Comet (8s cast)
             // --- Damage: Phantom Cannoneer ---
             [41626] = new(Kind.Damage, None), // Phantom Fire (kill proc fizzles on bosses, potency still applies)
@@ -86,7 +89,8 @@ namespace YABOT.Features.OccultCrescent
             [41636] = new(Kind.Damage, None), // Predict
             [41637] = new(Kind.Damage, None), // Phantom Judgment
             [41638] = new(Kind.Damage, None), // Cleansing
-            [41640] = new(Kind.Damage, None), // Starfall (hits self for up to 90% max HP)
+            // Starfall (41640) deliberately excluded: costs up to 90% of your own max HP, too
+            // expensive to spend on trash - left for manual use.
             // --- Damage: Phantom Mystic Knight / Gladiator ---
             [46591] = new(Kind.Damage, None), // Sundering Spellblade
             [46592] = new(Kind.Damage, None), // Holy Spellblade
@@ -138,7 +142,8 @@ namespace YABOT.Features.OccultCrescent
             [41624] = new(Kind.Debuff, new uint[] { 4259 }),      // Occult Mage Masher
             [41649] = new(Kind.Debuff, new uint[] { 4279 }),      // Pilfer Weapon -> Weapon Pilfered
             [46605] = new(Kind.Debuff, new uint[] { 4802 }, NotOnBosses: true), // Mesmerize -> Mesmerized
-            [49075] = new(Kind.Debuff, new uint[] { 5317 }, NotOnBosses: true), // Occult Toad
+            // Occult Toad (49075) deliberately excluded: automating it means it goes off on every
+            // piece of trash, while it's only worth using on select targets - left for manual use.
             // Occult Libra applies whichever of the four elemental weaknesses the target actually has,
             // so gate on all of them - that also picks up a Libra cast by anyone else in the party.
             [49094] = new(Kind.Debuff, new uint[] { 5322, 5323, 5324, 5325 }), // Fire/Ice/Lightning/Wind Weakness
@@ -600,6 +605,7 @@ namespace YABOT.Features.OccultCrescent
         private bool Eligible(Entry entry, uint actionId, SheetInfo info, IPlayerCharacter player, IBattleNpc target)
         {
             if (entry.NotOnBosses && IsBoss(target)) return false;
+            if (entry.BossesOnly && !IsBoss(target)) return false;
 
             switch (entry.Kind)
             {
