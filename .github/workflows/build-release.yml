@@ -5,7 +5,9 @@ on:
     paths:
       - 'yabot/**.cs'
       - 'yabot/**.csproj'
+      - 'yabot/**.json'
       - 'yabot.sln'
+      - '.github/workflows/build-release.yml'
   workflow_dispatch:
 
 permissions:
@@ -39,24 +41,47 @@ jobs:
         run: dotnet build -c Release --property:WarningLevel=0
         working-directory: yabot
 
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: yabot
-          path: |
-            yabot/bin/Release/yabot.dll
-            yabot/bin/Release/yabot.json
-
-      - name: Create Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Determine tag
+        id: tag
         run: |
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             TAG="${{ github.ref_name }}"
           else
             TAG="v$(date +'%Y%m%d%H%M%S')-${GITHUB_SHA::7}"
           fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
+      - name: Package full plugin zip
+        id: package
+        run: |
+          # Dalamud.NET.Sdk already emits a complete plugin package (yabot.dll, yabot.json,
+          # yabot.deps.json and the ECommons project reference) - reuse it rather than
+          # assembling the file list by hand, so a new dependency can't be forgotten.
+          SDK_ZIP=$(find yabot/bin/Release -name latest.zip -print -quit)
+          if [ -z "$SDK_ZIP" ]; then
+            echo "::error::Dalamud SDK plugin zip not found under yabot/bin/Release"
+            exit 1
+          fi
+          ZIP="yabot-${{ steps.tag.outputs.tag }}-full.zip"
+          cp "$SDK_ZIP" "$ZIP"
+          unzip -l "$ZIP"
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: yabot
+          path: |
+            ${{ steps.package.outputs.zip }}
+            yabot/bin/Release/yabot.dll
+            yabot/bin/Release/yabot.json
+
+      - name: Create Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          ZIP: ${{ steps.package.outputs.zip }}
+        run: |
           # Get the previous tag for changelog
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
 
@@ -69,8 +94,19 @@ jobs:
             NOTES=$(git log --pretty=format:"- %s" 2>/dev/null || echo "Initial release")
           fi
 
+          {
+            echo "$NOTES"
+            echo
+            echo "## Installing"
+            echo
+            echo "First install: download **$ZIP** and extract it - it holds the plugin plus the dependencies it needs to load. Point the Dalamud dev plugin location at the extracted \`yabot.dll\`."
+            echo
+            echo "Updating an existing install: \`yabot.dll\` and \`yabot.json\` on their own are enough."
+          } > release-notes.md
+
           gh release create "$TAG" \
+            "$ZIP" \
             yabot/bin/Release/yabot.dll \
             yabot/bin/Release/yabot.json \
-            --notes "$NOTES" \
+            --notes-file release-notes.md \
             --title "Release $TAG"
