@@ -4,12 +4,14 @@ While inside a deep dungeon, this keeps you alive by automatically using the dun
 
 ## What it does
 
-- **Auto-use HP potion** - drinks the dungeon's instant-heal potion when your HP drops below the configured percentage (default 30%). The potion is chosen per dungeon: **Max-Potion** (item 13637) in Palace of the Dead, **Super-Potion** (23167) in Heaven-on-High.
-- **Auto-use regen potion** - drinks the dungeon's HP-regen potion below a higher percentage (default 60%): **Sustaining Potion** (20309) in PotD, **Empyrean Potion** (23163) in HoH. Both grant the **Rehabilitation** regen for 30s; it is not re-drunk while that regen is already ticking (detected by status name, which also avoids stacking over a manual drink).
+- **Auto-use HP potion** - drinks the dungeon's instant-heal potion when your HP drops below the configured percentage (default 30%). The potion is chosen per dungeon: **Max-Potion** (item 13637) in Palace of the Dead, **Super-Potion** (23167) in Heaven-on-High, **Hyper-Potion** (38956) in Eureka Orthos, **Ultra-Potion** (47701) in Pilgrim's Traverse.
+- **Auto-use regen potion** - drinks the dungeon's HP-regen potion below a higher percentage (default 60%): **Sustaining Potion** (20309) in PotD, **Empyrean Potion** (23163) in HoH, **Orthos Potion** (38944) in Eureka Orthos, **Pilgrim's Potion** (47102) in Pilgrim's Traverse. They all grant the **Rehabilitation** regen for 30s; it is not re-drunk while that regen is already ticking, which also avoids stacking over a manual drink.
+
+  Eureka Orthos muddies this: killing a dread beast grants its own, much weaker **Rehabilitation**, filed under the *other* buff list rather than *enhancements*. That one is ignored, so a dread beast kill never talks the feature out of drinking a real potion.
 - **Auto-use regen ability** - on jobs that have a self-targeted regen oGCD, keeps it up while you are in combat, recasting on yourself whenever its buff isn't already active: **Gunbreaker - Aurora** (action 16151, status 1835) and **Warrior - Equilibrium** (action 3552, status 2681). It is gated to in-combat so charges aren't burned while exploring between packs.
 - **Auto-use Second Wind** - fires **Second Wind** (action 7541), the Disciple of War role action, as an instant self-heal when HP drops below the HP potion threshold, **in combat only**. It is checked *before* the HP potion: because it's a free heal, whenever it's available it covers the low-HP heal and the potion is held for that frame; once Second Wind goes on recast the potion takes over as the fallback. It grants no buff, so availability is gated purely on `GetActionStatus` (non-zero on jobs that lack it - casters/healers - or while it's on recast), with a 2-second anti-double-fire debounce.
 
-Eureka Orthos has no equivalent potions, so the potion options simply do nothing there; the regen ability still runs.
+In a deep dungeon the feature doesn't recognise, the potion options simply do nothing; the regen ability still runs.
 
 ## Quality (HQ) handling
 

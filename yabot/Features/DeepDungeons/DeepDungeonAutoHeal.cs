@@ -69,6 +69,16 @@ namespace YABOT.Features.DeepDungeons
         // single id - that gate alone keeps us from re-drinking the regen while it's already ticking.
         private const string RehabilitationStatus = "Rehabilitation";
 
+        // ...except Eureka Orthos also hands out a much weaker "Rehabilitation" for killing a dread
+        // beast, and letting that one satisfy the gate would hold the potion back when we actually
+        // need it. In EO that's status 3492 (purple icon 216835, filed under the "other" buff list)
+        // versus the Orthos Potion's 3367 (blue icon 215532, filed under enhancements). Rather than
+        // blacklist the id, we key off what drives that split: PartyListPriority is 0 for everything
+        // in the "other" bucket (food, medicated, the dread beast regen) and non-zero for real
+        // enhancements - so a priority-0 match never counts. No per-dungeon id table needed, and it
+        // still holds if a later dungeon adds its own throwaway Rehabilitation.
+        private const byte OtherBucketPriority = 0;
+
         // Anti-double-fire window for the regen *ability* (long-cooldown oGCD, no inventory to watch).
         private const double AttemptDebounce = 2.0;
 
@@ -254,8 +264,9 @@ namespace YABOT.Features.DeepDungeons
             foreach (var s in player.StatusList)
             {
                 if (s.StatusId == 0) continue;
-                if (sheet.TryGetRow(s.StatusId, out var row)
-                    && row.Name.ToString().Equals(statusName, StringComparison.OrdinalIgnoreCase))
+                if (!sheet.TryGetRow(s.StatusId, out var row)) continue;
+                if (row.PartyListPriority == OtherBucketPriority) continue; // "other" bucket - see above
+                if (row.Name.ToString().Equals(statusName, StringComparison.OrdinalIgnoreCase))
                     return true;
             }
             return false;
