@@ -1,10 +1,10 @@
 using Dalamud.Bindings.ImGui;
-using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Interface.Utility;
 using ECommons.DalamudServices;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.Game.Object;
 using YABOT.FeaturesSetup;
+using YABOT.Helpers;
 using YABOT.UI;
 using System.Numerics;
 
@@ -105,20 +105,13 @@ public unsafe class MeleeRangeOverlay : BaseFeature
         }
     }
 
-    private static bool IsInDialogue()
-    {
-        return Svc.Condition[ConditionFlag.OccupiedInQuestEvent]
-            || Svc.Condition[ConditionFlag.OccupiedInEvent]
-            || Svc.Condition[ConditionFlag.OccupiedInCutSceneEvent];
-    }
-
     public override bool DrawConditions()
     {
         try
         {
             if (Svc.Objects.LocalPlayer is null) return false;
             if (!IsMeleeJob()) return false;
-            if (IsInDialogue()) return false;
+            if (ConditionHelper.IsInDialogue()) return false;
             if (Svc.Targets.Target is null && Config.NoTargetMode == NoTargetDisplay.Hidden) return false;
             return true;
         }

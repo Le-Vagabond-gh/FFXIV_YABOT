@@ -10,6 +10,7 @@ using FFXIVClientStructs.FFXIV.Client.Game.Fate;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using Lumina.Excel.Sheets;
 using YABOT.FeaturesSetup;
+using YABOT.Helpers;
 using System;
 using System.Linq;
 using System.Numerics;
@@ -73,13 +74,6 @@ namespace YABOT.Features.Other
             }
         }
 
-        private bool IsInDialogue()
-        {
-            return Svc.Condition[ConditionFlag.OccupiedInQuestEvent]
-                || Svc.Condition[ConditionFlag.OccupiedInEvent]
-                || Svc.Condition[ConditionFlag.OccupiedInCutSceneEvent];
-        }
-
         public byte FateMaxLevel;
         public override void Enable()
         {
@@ -107,7 +101,7 @@ namespace YABOT.Features.Other
 
                 if (Svc.Objects.LocalPlayer?.Level > FateMaxLevel)
                 {
-                    if (IsInDialogue())
+                    if (ConditionHelper.IsInDialogue())
                         pendingSync = true;
                     else
                         Chat.SendMessage("/lsync");
@@ -123,7 +117,7 @@ namespace YABOT.Features.Other
                     FateMaxLevel = FateManager.Instance()->CurrentFate->MaxLevel;
                     FateID = FateManager.Instance()->CurrentFate->FateId;
 
-                    if (pendingSync && !IsInDialogue())
+                    if (pendingSync && !ConditionHelper.IsInDialogue())
                     {
                         pendingSync = false;
                         if (Svc.Objects.LocalPlayer?.Level > FateMaxLevel)

@@ -1,10 +1,10 @@
 using System;
-using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Plugin.Services;
 using ECommons.DalamudServices;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using YABOT.FeaturesSetup;
+using YABOT.Helpers;
 
 namespace YABOT.Features.UI
 {
@@ -63,7 +63,7 @@ namespace YABOT.Features.UI
 
                 if (!pendingOpen) return;
 
-                if (IsInCutscene())
+                if (ConditionHelper.IsInCutscene())
                 {
                     cutsceneThrottle = 0;
                     return;
@@ -91,9 +91,5 @@ namespace YABOT.Features.UI
             agent->Show();
         }
 
-        private static bool IsInCutscene()
-            => Svc.Condition[ConditionFlag.WatchingCutscene]
-            || Svc.Condition[ConditionFlag.WatchingCutscene78]
-            || Svc.Condition[ConditionFlag.OccupiedInCutSceneEvent];
     }
 }
