@@ -1,10 +1,13 @@
-using Dalamud.Game.Addon.Lifecycle;
+﻿using Dalamud.Game.Addon.Lifecycle;
 using Dalamud.Plugin.Services;
 using Dalamud.Game.Addon.Lifecycle.AddonArgTypes;
 using Dalamud.Game.Config;
 using Dalamud.Hooking;
+using Dalamud.Interface.Components;
+using Dalamud.Plugin.Ipc;
 using Dalamud.Bindings.ImGui;
 using ECommons.DalamudServices;
+using ECommons.UIHelpers.AddonMasterImplementations;
 using FFXIVClientStructs.FFXIV.Client.Game.Character;
 using FFXIVClientStructs.FFXIV.Client.Game.Object;
 using FFXIVClientStructs.FFXIV.Client.Game.UI;
@@ -172,6 +175,7 @@ namespace YABOT.Features.Other
             public Dictionary<ulong, SavedMinionData> SavedMinions = new();
             public Vector3 MinionPosition = new(0.7f, 0f, -0.5f);
             public bool SkipLoginConfirm = false;
+            public bool AutoLoginSingleCharacter = false;
             public bool SkipLogoutConfirm = false;
             public bool SkipLogo = false;
             public bool MoveQueueDialog = false;
@@ -944,6 +948,8 @@ namespace YABOT.Features.Other
                 if (Config.SkipLogoutConfirm && Svc.ClientState.IsLoggedIn)
                     AutoConfirmLogoutIfVisible();
 
+                TryAutoLogin();
+
                 if (pendingSheatheCompleteAt.HasValue && DateTime.Now >= pendingSheatheCompleteAt.Value)
                 {
                     pendingSheatheCompleteAt = null;
@@ -1187,6 +1193,7 @@ namespace YABOT.Features.Other
 
         private void OnLogin()
         {
+            hasLoggedInThisSession = true;
             UpdatePetMirageSettings();
         }
 
@@ -1387,6 +1394,78 @@ namespace YABOT.Features.Other
             catch (Exception e)
             {
                 Svc.Log.Error(e, "CharaSelectEmote.DespawnMinion");
+            }
+        }
+
+        #endregion
+
+        #region Auto Login
+
+        // Clicks the only listed character on char-select and confirms the login
+        // dialog. Gated on never having been logged in this session, so logging out
+        // to switch characters doesn't drag you straight back in, and skipped while
+        // Lifestream is running one of its own login/travel tasks.
+        private bool hasLoggedInThisSession;
+        private DateTime? charaSelectSeenAt;
+        private DateTime nextAutoLoginCheck = DateTime.MinValue;
+        private ICallGateSubscriber<bool>? lifestreamIsBusy;
+
+        // The character list is empty for a few frames after the addon appears, so
+        // wait before trusting the count.
+        private const double AutoLoginSettleSeconds = 1.5;
+        private const double AutoLoginRetrySeconds = 5;
+
+        private void TryAutoLogin()
+        {
+            if (!Config.AutoLoginSingleCharacter || hasLoggedInThisSession || Svc.ClientState.IsLoggedIn)
+                return;
+
+            try
+            {
+                if (!ECommons.GenericHelpers.TryGetAddonMaster<AddonMaster._CharaSelectListMenu>(out var menu) || !menu.IsAddonReady)
+                {
+                    charaSelectSeenAt = null;
+                    return;
+                }
+
+                charaSelectSeenAt ??= DateTime.Now;
+                if (DateTime.Now < charaSelectSeenAt.Value.AddSeconds(AutoLoginSettleSeconds))
+                    return;
+
+                if (DateTime.Now < nextAutoLoginCheck)
+                    return;
+                nextAutoLoginCheck = DateTime.Now.AddSeconds(AutoLoginRetrySeconds);
+
+                if (IsLifestreamBusy())
+                    return;
+
+                var characters = menu.Characters;
+                if (characters.Length != 1 || !characters[0].CanLoginNormally)
+                    return;
+
+                // Auto-login always confirms, independently of the Skip Login Confirm
+                // toggle - otherwise it would just stall on the yes/no dialog.
+                Svc.AddonLifecycle.UnregisterListener(OnSelectYesnoSetup);
+                Svc.AddonLifecycle.RegisterListener(AddonEvent.PostSetup, "SelectYesno", OnSelectYesnoSetup);
+                characters[0].Login();
+            }
+            catch (Exception e)
+            {
+                Svc.Log.Error(e, "LoginImprovements.TryAutoLogin");
+            }
+        }
+
+        private bool IsLifestreamBusy()
+        {
+            try
+            {
+                lifestreamIsBusy ??= Svc.PluginInterface.GetIpcSubscriber<bool>("Lifestream.IsBusy");
+                return lifestreamIsBusy.InvokeFunc();
+            }
+            catch
+            {
+                // Lifestream not installed / not loaded.
+                return false;
             }
         }
 
@@ -1711,6 +1790,13 @@ namespace YABOT.Features.Other
                 SaveConfig(Config);
                 hasChanged = true;
             }
+
+            if (ImGui.Checkbox("Auto Login Single Character", ref Config.AutoLoginSingleCharacter))
+            {
+                SaveConfig(Config);
+                hasChanged = true;
+            }
+            ImGuiComponents.HelpMarker("Logs in automatically when the character select screen lists exactly one character. Only until you have logged in once this game session, and never while Lifestream is busy.");
 
             if (ImGui.Checkbox("Skip Logout Confirm", ref Config.SkipLogoutConfirm))
             {
