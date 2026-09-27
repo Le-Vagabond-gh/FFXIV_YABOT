@@ -1260,9 +1260,9 @@ namespace YABOT.Features.DeepDungeons
             { "Vortex", "summon garuda" },
             { "Elder", "summon odin" },
             // Eureka Orthos demiclones
-            { "Unei", "healer summon" },
-            { "Doga", "damage summon" },
-            { "Onion", "balanced summon" },
+            { "Unei", "Unei" },
+            { "Doga", "Doga" },
+            { "Onion", "Onion" },
             // Pilgrim's Traverse juniper incenses
             { "Mazeroot", "reveal + cleanse + polymorph" },
             { "Barkbalm", "double HP + boss dps" },
