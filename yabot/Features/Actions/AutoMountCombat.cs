@@ -39,6 +39,7 @@ namespace YABOT.Features.Actions
             public uint SelectedMount = 0;
             public bool DisableInFates = true;
             public bool ExcludeHousing = false;
+            public bool ExcludePvP = false;
             public bool ExcludeOccultCrescent = false;
             public bool UseReturnInOccultCrescent = false;
             public bool AutoConfirmReturnInOccultCrescent = false;
@@ -210,6 +211,12 @@ namespace YABOT.Features.Actions
 
             var territory = Svc.Data.GetExcelSheet<TerritoryType>().First(x => x.RowId == Svc.ClientState.TerritoryType);
 
+            if (Config.ExcludePvP && Svc.ClientState.IsPvPExcludingDen)
+            {
+                TaskManager.Abort();
+                return false;
+            }
+
             if (territory.Bg.ToString().Contains("/hou/") && Config.ExcludeHousing)
             {
                 TaskManager.Abort();
@@ -357,6 +364,7 @@ namespace YABOT.Features.Actions
 
             if (ImGui.Checkbox("Disable in fates", ref Config.DisableInFates)) haschanged = true;
             if (ImGui.Checkbox("Exclude Housing Zones", ref Config.ExcludeHousing)) haschanged = true;
+            if (ImGui.Checkbox("Exclude PvP Duties", ref Config.ExcludePvP)) haschanged = true;
             if (ImGui.Checkbox("Exclude The Occult Crescent", ref Config.ExcludeOccultCrescent)) haschanged = true;
             if (Config.ExcludeOccultCrescent)
             {
