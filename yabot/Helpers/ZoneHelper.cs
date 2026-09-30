@@ -25,6 +25,30 @@ public static class ZoneHelper
 
     public static bool IsDeepDungeon(uint territoryId) => HasIntendedUse(territoryId, DeepDungeonIntendedUse);
 
+    public enum DeepDungeonKind { None, PalaceOfTheDead, HeavenOnHigh, EurekaOrthos, PilgrimsTraverse }
+
+    // Deep dungeon territories grouped by PlaceName, resolved from the territory rather than the DD
+    // director, which may not exist yet during zone-in. The Final Verse shares Pilgrim's Traverse's.
+    public static DeepDungeonKind GetDeepDungeon(uint territoryId)
+    {
+        if (!IsDeepDungeon(territoryId)) return DeepDungeonKind.None;
+        try
+        {
+            return Svc.Data.GetExcelSheet<TerritoryType>().GetRow(territoryId).PlaceName.RowId switch
+            {
+                1793 => DeepDungeonKind.PalaceOfTheDead,
+                2775 => DeepDungeonKind.HeavenOnHigh,
+                2529 => DeepDungeonKind.EurekaOrthos,
+                5277 => DeepDungeonKind.PilgrimsTraverse,
+                _ => DeepDungeonKind.None,
+            };
+        }
+        catch
+        {
+            return DeepDungeonKind.None;
+        }
+    }
+
     private static bool HasIntendedUse(uint territoryId, uint intendedUse)
     {
         try

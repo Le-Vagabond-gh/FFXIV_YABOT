@@ -7,6 +7,7 @@ using FFXIVClientStructs.FFXIV.Client.UI.Misc;
 using System;
 using System.Collections.Generic;
 using YABOT.FeaturesSetup;
+using YABOT.Helpers;
 
 namespace YABOT.Features.Other
 {
@@ -107,50 +108,23 @@ namespace YABOT.Features.Other
 
         private void ApplyTitle(int gearsetId)
         {
-            var player = Svc.Objects.LocalPlayer;
-            if (player == null) return;
-
-            var ui = UIState.Instance();
-            if (ui == null) return;
-
             var titleId = Config.GearsetTitleIds.TryGetValue(gearsetId, out var assigned) ? assigned : Config.DefaultTitleId;
             if (titleId < 0) return;
 
-            // The unlock check is only trustworthy once the server has sent the title list; before that,
-            // trust the stored id rather than refusing to apply anything.
-            if (titleId > 0 && ui->TitleList.DataReceived && !ui->TitleList.IsTitleUnlocked((ushort)titleId))
+            switch (TitleHelper.Apply(titleId))
             {
-                Log($"title #{titleId} is not unlocked, skipping gearset {gearsetId}");
-                return;
-            }
-
-            if (((Character*)player.Address)->CharacterData.TitleId == titleId) return;
-
-            Log($"gearset {gearsetId} -> title {titleId} ({TitleName(titleId)})");
-            ui->TitleController.SendTitleIdUpdate((ushort)titleId);
-
-            if (Config.AnnounceInChat)
-                Svc.Chat.Print($"[YABOT] Title set to {TitleName(titleId)}.");
-        }
-
-        private static string TitleName(int titleId)
-        {
-            if (titleId == 0) return "(no title)";
-            try
-            {
-                var row = Svc.Data.GetExcelSheet<Lumina.Excel.Sheets.Title>().GetRowOrDefault((uint)titleId);
-                if (!row.HasValue) return $"title #{titleId}";
-
-                var playerState = PlayerState.Instance();
-                var feminine = playerState != null && playerState->Sex == 1;
-                var name = (feminine ? row.Value.Feminine : row.Value.Masculine).ExtractText();
-                return string.IsNullOrEmpty(name) ? $"title #{titleId}" : name;
-            }
-            catch
-            {
-                return $"title #{titleId}";
+                case TitleHelper.ApplyResult.NotUnlocked:
+                    Log($"title #{titleId} is not unlocked, skipping gearset {gearsetId}");
+                    return;
+                case TitleHelper.ApplyResult.Applied:
+                    Log($"gearset {gearsetId} -> title {titleId} ({TitleName(titleId)})");
+                    if (Config.AnnounceInChat)
+                        TitleHelper.Announce(titleId);
+                    return;
             }
         }
+
+        private static string TitleName(int titleId) => TitleHelper.TitleName(titleId);
 
         // Titles the character actually owns, cached once the server has sent the list.
         private List<(int Id, string Name)> GetUnlockedTitles()
@@ -158,19 +132,12 @@ namespace YABOT.Features.Other
             if (unlockedTitles != null) return unlockedTitles;
 
             var list = new List<(int Id, string Name)>();
-            var ui = UIState.Instance();
-            if (ui == null) return list;
-
-            if (!ui->TitleList.DataReceived)
-            {
-                if (!ui->TitleList.DataRequested) ui->TitleList.RequestTitleList();
-                return list;
-            }
+            if (!TitleHelper.UnlocksKnown()) return list;
 
             foreach (var row in Svc.Data.GetExcelSheet<Lumina.Excel.Sheets.Title>())
             {
                 if (row.RowId == 0) continue;
-                if (!ui->TitleList.IsTitleUnlocked((ushort)row.RowId)) continue;
+                if (!TitleHelper.IsUnlocked((int)row.RowId)) continue;
                 list.Add(((int)row.RowId, TitleName((int)row.RowId)));
             }
 

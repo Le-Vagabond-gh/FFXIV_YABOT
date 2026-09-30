@@ -2,7 +2,6 @@ using Dalamud.Hooking;
 using ECommons.DalamudServices;
 using FFXIVClientStructs.FFXIV.Client.Game.Character;
 using FFXIVClientStructs.FFXIV.Client.Game.Control;
-using Lumina.Excel.Sheets;
 using YABOT.FeaturesSetup;
 using YABOT.Helpers;
 using System;
@@ -45,13 +44,6 @@ namespace YABOT.Features.DeepDungeons
         }
 
         public Configs Config { get; private set; } = null!;
-
-        // Deep dungeon territories grouped by PlaceName. Resolved from the territory rather than the
-        // DD director, which may not exist yet while the character is spawned during zone-in.
-        private const uint PalaceOfTheDeadPlace = 1793;
-        private const uint HeavenOnHighPlace = 2775;
-        private const uint EurekaOrthosPlace = 2529;
-        private const uint PilgrimsTraversePlace = 5277;
 
         private Hook<DrawDataContainer.Delegates.LoadWeapon>? loadWeaponHook;
 
@@ -123,17 +115,13 @@ namespace YABOT.Features.DeepDungeons
             return owner != null && owner == (Character*)Control.GetLocalPlayer();
         }
 
-        private bool IsEnabledFor(uint territory)
+        private bool IsEnabledFor(uint territory) => ZoneHelper.GetDeepDungeon(territory) switch
         {
-            if (!Svc.Data.GetExcelSheet<TerritoryType>().TryGetRow(territory, out var row)) return false;
-            return row.PlaceName.RowId switch
-            {
-                PalaceOfTheDeadPlace => Config.PalaceOfTheDead,
-                HeavenOnHighPlace => Config.HeavenOnHigh,
-                EurekaOrthosPlace => Config.EurekaOrthos,
-                PilgrimsTraversePlace => Config.PilgrimsTraverse,
-                _ => false,
-            };
-        }
+            ZoneHelper.DeepDungeonKind.PalaceOfTheDead => Config.PalaceOfTheDead,
+            ZoneHelper.DeepDungeonKind.HeavenOnHigh => Config.HeavenOnHigh,
+            ZoneHelper.DeepDungeonKind.EurekaOrthos => Config.EurekaOrthos,
+            ZoneHelper.DeepDungeonKind.PilgrimsTraverse => Config.PilgrimsTraverse,
+            _ => false,
+        };
     }
 }
