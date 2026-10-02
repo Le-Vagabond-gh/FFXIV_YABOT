@@ -88,7 +88,8 @@ namespace YABOT.Features.DeepDungeons
                 if (skipGameObject == 0 && (uint)slot < 2 && IsLocalPlayer(drawData))
                 {
                     var territory = Svc.ClientState.TerritoryType;
-                    if (!ZoneHelper.IsDeepDungeon(territory))
+                    // Lobbies count as inside: they show the deep dungeon model too.
+                    if (ZoneHelper.GetDeepDungeon(territory) == ZoneHelper.DeepDungeonKind.None)
                     {
                         kept[(int)slot] = weaponData.Value;
                     }

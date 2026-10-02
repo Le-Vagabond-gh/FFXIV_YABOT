@@ -17,5 +17,5 @@ Each deep dungeon has its own toggle, all on by default:
 
 ## Notes
 
-- The weapon kept is the last one you had on outside a deep dungeon. If the plugin is loaded or reloaded while you're already inside, the dungeon model stays until you leave.
+- The weapon kept is the last one you had on outside a deep dungeon. The area you land in after clearing a set of floors (with the exit and next-floor portals) counts as inside, so chained floor sets keep your weapon too. If the plugin is loaded or reloaded while you're already inside, the dungeon model stays until you leave.
 - A Glamourer design that sets your weapon still wins. If Glamourer doesn't touch your weapon, reverting to game state in Glamourer shows your kept weapon, not the dungeon model.
