@@ -182,7 +182,12 @@ namespace YABOT.Features.DeepDungeons
         // Pending pomander use from a Yes click. UsePomander returns void and can be silently rejected
         // (animation lock, etc.), so we retry until the slot count actually drops - the only proof it
         // landed - and only then arm the re-open. A use that never goes through opens nothing.
+        // If the effect comes up before our use lands (a party member spent theirs), the use is
+        // dropped - burning ours on top would be a waste. Name + was-active baseline are captured
+        // at Yes time so the check tracks a transition, not an effect that was already up.
         private uint? _pendingUseSlot;
+        private string _pendingUseName = string.Empty;
+        private bool _pendingUseWasActive;
         private byte _pendingUseCount;
         private DateTime _pendingUseDeadline;
         private DateTime _pendingUseLastTry = DateTime.MinValue;
@@ -265,6 +270,16 @@ namespace YABOT.Features.DeepDungeons
                     return;
 
                 var text = chatMessage.Message.TextValue;
+
+                // Second safeguard behind the effect check in TickPendingUse: the game refusing our
+                // pending use with one of the deep-dungeon pomander error lines means a party member
+                // beat us to it. Drop the queued use (and so the re-open) instead of retrying into it.
+                if (_pendingUseSlot != null && IsPomanderRefusal(text))
+                {
+                    _pendingUseSlot = null;
+                    return;
+                }
+
                 var capped = text.Contains("cannot carry any more", StringComparison.OrdinalIgnoreCase);
                 // "use a" keeps this off the capped/return lines, which never contain it.
                 var used = !capped && text.Contains("use a", StringComparison.OrdinalIgnoreCase);
@@ -333,6 +348,22 @@ namespace YABOT.Features.DeepDungeons
             {
                 Svc.Log.Error(ex, $"[{Name}] chat handler failed");
             }
+        }
+
+        // The two deep-dungeon error lines the game prints when a pomander use is refused because the
+        // effect is already up: LogMessage 7271 "Unable to execute command while recast timer is on
+        // cooldown." and 7266 "That effect has already been triggered." Both are plain text with no
+        // item payload, so they're matched whole against the sheet (language-independent).
+        private static readonly uint[] PomanderRefusalLogMessages = { 7271, 7266 };
+
+        private static bool IsPomanderRefusal(string text)
+        {
+            var sheet = Svc.Data.GetExcelSheet<LogMessage>();
+            foreach (var id in PomanderRefusalLogMessages)
+                if (sheet.TryGetRow(id, out var row)
+                    && text.Equals(row.Text.ToString(), StringComparison.Ordinal))
+                    return true;
+            return false;
         }
 
         // Finds the dungeon pomander slot a chat line refers to by matching the item's Singular form
@@ -508,6 +539,8 @@ namespace YABOT.Features.DeepDungeons
                     // tick, which retries until the slot count drops and only then arms the re-open, so
                     // a use that never goes through never opens the coffer.
                     _pendingUseSlot = slot;
+                    _pendingUseName = _promptName;
+                    _pendingUseWasActive = IsPomanderActive(dd, (int)slot, _promptName);
                     _pendingUseCount = dd->Items[(int)slot].Count;
                     _pendingUseDeadline = DateTime.Now.AddSeconds(UseTimeoutSeconds);
                     _pendingUseLastTry = DateTime.MinValue;
@@ -561,8 +594,14 @@ namespace YABOT.Features.DeepDungeons
                 return;
             }
 
-            // Never went through within the window -> give up without touching the coffer.
+            // Never went through within the window, or someone else's use lit the effect up first ->
+            // give up without touching the coffer.
             if (now > _pendingUseDeadline) { _pendingUseSlot = null; return; }
+            if (!_pendingUseWasActive && IsPomanderActive(dd, (int)slot, _pendingUseName))
+            {
+                _pendingUseSlot = null;
+                return;
+            }
 
             // Retry a couple times a second; a successful use animation-locks us, which blocks a
             // second fire until the count drops above, so this won't burn two pomanders.
@@ -811,12 +850,7 @@ namespace YABOT.Features.DeepDungeons
                 if (string.IsNullOrEmpty(name)) continue;
 
                 var shortName = StripPomanderPrefix(name);
-
-                // Some pomanders grant a normal player buff rather than a floor-wide effect, so the
-                // struct's IsActive flag never lights up for them; detect those by buff name instead.
-                var isActive = PomanderStatusId.TryGetValue(shortName, out var statusId)
-                    ? PlayerHasStatus(statusId)
-                    : info.IsActive;
+                var isActive = IsPomanderActive(dd, slot, shortName);
 
                 // Keep a pomander listed while its effect is active even if the last one was
                 // consumed, so the active marker doesn't vanish the moment the count hits zero -
@@ -1279,6 +1313,14 @@ namespace YABOT.Features.DeepDungeons
             { "Steel", 1100 },
             { "Haste", 4718 },
         };
+
+        // Whether a pomander's effect is currently up. Some pomanders grant a normal player buff
+        // rather than a floor-wide effect, so the struct's IsActive flag never lights up for them;
+        // detect those by status ID instead.
+        private static bool IsPomanderActive(InstanceContentDeepDungeon* dd, int slot, string shortName)
+            => PomanderStatusId.TryGetValue(shortName, out var statusId)
+                ? PlayerHasStatus(statusId)
+                : dd->Items[slot].IsActive;
 
         private static bool PlayerHasStatus(uint statusId)
         {
