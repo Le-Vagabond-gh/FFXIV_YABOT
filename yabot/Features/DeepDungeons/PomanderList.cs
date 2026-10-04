@@ -187,9 +187,11 @@ namespace YABOT.Features.DeepDungeons
         // landed - and only then arm the re-open. A use that never goes through opens nothing.
         // If the effect comes up before our use lands (a party member spent theirs), the use is
         // dropped - burning ours on top would be a waste. The name is captured at Yes time for the
-        // status-based active check; the prompt never offers Yes while the effect is already up.
+        // status-based active check. A Refresh (re-applying an already-active buff) opts out of
+        // that cancel, since the effect is up from the start by design.
         private uint? _pendingUseSlot;
         private string _pendingUseName = string.Empty;
+        private bool _pendingUseRefresh;
         private byte _pendingUseCount;
         private DateTime _pendingUseDeadline;
         private DateTime _pendingUseLastTry = DateTime.MinValue;
@@ -544,35 +546,63 @@ namespace YABOT.Features.DeepDungeons
                 {
                     ImGui.TextUnformatted($"At max {_promptName}. This effect is already active.");
                     ImGui.Spacing();
-                    if (ImGui.Button("OK", new Vector2(120, 0)))
+                    // Player buffs (Strength/Steel/Haste) are timed, so re-applying one is a real
+                    // refresh and still frees the slot; floor-wide effects (Intuition etc.) aren't.
+                    var refreshable = PomanderStatusId.ContainsKey(_promptName);
+                    CenterButtons(refreshable ? 2 : 1);
+                    if (refreshable)
+                    {
+                        if (ImGui.Button("Refresh", PromptButtonSize))
+                            QueuePendingUse(dd, slot, refresh: true);
+                        ImGui.SameLine();
+                    }
+                    if (ImGui.Button("OK", PromptButtonSize))
                         _promptSlot = null;
                 }
                 else
                 {
                     ImGui.TextUnformatted($"At max {_promptName}. Use one to free a slot?");
                     ImGui.Spacing();
-
-                    if (ImGui.Button("Yes", new Vector2(120, 0)))
-                    {
-                        // Don't use (or re-open) inline: the use can be rejected. Hand it to the
-                        // pending-use tick, which retries until the slot count drops and only then arms
-                        // the re-open, so a use that never goes through never opens the coffer.
-                        _pendingUseSlot = slot;
-                        _pendingUseName = _promptName;
-                        _pendingUseCount = dd->Items[(int)slot].Count;
-                        _pendingUseDeadline = DateTime.Now.AddSeconds(UseTimeoutSeconds);
-                        _pendingUseLastTry = DateTime.MinValue;
-                        _pendingThenReopen = Config.ReopenCofferAfterUse && _promptChestId != 0;
-                        _promptSlot = null;
-                    }
+                    CenterButtons(2);
+                    if (ImGui.Button("Yes", PromptButtonSize))
+                        QueuePendingUse(dd, slot, refresh: false);
                     ImGui.SameLine();
-                    if (ImGui.Button("No", new Vector2(120, 0)))
+                    if (ImGui.Button("No", PromptButtonSize))
                         _promptSlot = null;
                 }
             }
             ImGui.End();
 
             ImGui.PopStyleVar();
+        }
+
+        private static readonly Vector2 PromptButtonSize = new(120, 0);
+
+        // Offsets the cursor so `count` PromptButtonSize buttons (joined by SameLine) sit centered
+        // in the popup's content width.
+        private static void CenterButtons(int count)
+        {
+            var total = PromptButtonSize.X * count + ImGui.GetStyle().ItemSpacing.X * (count - 1);
+            var avail = ImGui.GetContentRegionAvail().X;
+            if (avail > total)
+                ImGui.SetCursorPosX(ImGui.GetCursorPosX() + (avail - total) * 0.5f);
+        }
+
+        // Hand a prompt-confirmed use to the pending-use tick and close the prompt. Don't use (or
+        // re-open) inline: the use can be rejected. The tick retries until the slot count drops and
+        // only then arms the re-open, so a use that never goes through never opens the coffer.
+        // `refresh` marks a deliberate re-apply of an already-active buff, so the tick's "effect came
+        // up, someone beat us to it" cancel doesn't fire on an effect that was up from the start.
+        private void QueuePendingUse(InstanceContentDeepDungeon* dd, uint slot, bool refresh)
+        {
+            _pendingUseSlot = slot;
+            _pendingUseName = _promptName;
+            _pendingUseRefresh = refresh;
+            _pendingUseCount = dd->Items[(int)slot].Count;
+            _pendingUseDeadline = DateTime.Now.AddSeconds(UseTimeoutSeconds);
+            _pendingUseLastTry = DateTime.MinValue;
+            _pendingThenReopen = Config.ReopenCofferAfterUse && _promptChestId != 0;
+            _promptSlot = null;
         }
 
         // The nearest deep-dungeon coffer to the player, by GameObjectId (0 if none in range). Called
@@ -616,7 +646,7 @@ namespace YABOT.Features.DeepDungeons
             // Never went through within the window, or someone else's use lit the effect up first ->
             // give up without touching the coffer.
             if (now > _pendingUseDeadline) { _pendingUseSlot = null; return; }
-            if (IsPomanderActive(dd, (int)slot, _pendingUseName))
+            if (!_pendingUseRefresh && IsPomanderActive(dd, (int)slot, _pendingUseName))
             {
                 _pendingUseSlot = null;
                 return;
