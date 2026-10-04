@@ -5,7 +5,7 @@ While inside a deep dungeon, this keeps you alive by automatically using the dun
 ## What it does
 
 - **Auto-use HP potion** - drinks the dungeon's instant-heal potion when your HP drops below the configured percentage (default 30%). The potion is chosen per dungeon: **Max-Potion** (item 13637) in Palace of the Dead, **Super-Potion** (23167) in Heaven-on-High, **Hyper-Potion** (38956) in Eureka Orthos, **Ultra-Potion** (47701) in Pilgrim's Traverse.
-- **Auto-use regen potion** - drinks the dungeon's HP-regen potion below a higher percentage (default 60%): **Sustaining Potion** (20309) in PotD, **Empyrean Potion** (23163) in HoH, **Orthos Potion** (38944) in Eureka Orthos, **Pilgrim's Potion** (47102) in Pilgrim's Traverse. They all grant the **Rehabilitation** regen for 30s; it is not re-drunk while that regen is already ticking, which also avoids stacking over a manual drink.
+- **Auto-use regen potion** - drinks the dungeon's HP-regen potion below a higher percentage that depends on the floor you are on. Four thresholds are available: **low floors** (Palace of the Dead 1-150, other dungeons 1-70; default 60%), **high floors** (PotD 151+, others 71+; default 80%), **low boss floors** (default 80%) and **high boss floors** (default 90%). Boss floors are every 10th floor, so deeper and more dangerous floors can keep the regen up more aggressively. The potions: **Sustaining Potion** (20309) in PotD, **Empyrean Potion** (23163) in HoH, **Orthos Potion** (38944) in Eureka Orthos, **Pilgrim's Potion** (47102) in Pilgrim's Traverse. They all grant the **Rehabilitation** regen for 30s; it is not re-drunk while that regen is already ticking, which also avoids stacking over a manual drink.
 
   Eureka Orthos muddies this: killing a dread beast grants its own, much weaker **Rehabilitation**, filed under the *other* buff list rather than *enhancements*. That one is ignored, so a dread beast kill never talks the feature out of drinking a real potion.
 - **Auto-use regen ability** - on jobs that have a self-targeted regen oGCD, keeps it up while you are in combat, recasting on yourself whenever its buff isn't already active: **Gunbreaker - Aurora** (action 16151, status 1835) and **Warrior - Equilibrium** (action 3552, status 2681). It is gated to in-combat so charges aren't burned while exploring between packs.
@@ -21,11 +21,11 @@ The potions you carry may be **High Quality**, and the game's item/action API ad
 
 Potions are fired **insistently**: on every `Framework.Update` tick, while the item is usable (`GetActionStatus` returns 0) and you are below the threshold, the feature re-attempts the drink. `UseAction` can report success and still be silently dropped under an animation lock ("it doesn't always go through"), so its return value is never trusted as proof. Instead the feature watches two real signals - the item going on recast (`GetActionStatus` flips to non-zero) and the inventory count dropping - to know the drink actually landed and stop. The only thing that pauses the retry is a brief 0.5s window after a fire whose count drop hasn't registered yet, so a single queued use doesn't turn into two drinks. The regen ability (an oGCD with no inventory to watch) keeps a simple 2-second anti-double-fire debounce.
 
-The HP potion and regen potion are independent items on their own recasts, so a low-HP emergency drink can fire even while the regen potion is on cooldown. Priorities fall out naturally from the two thresholds: below 30% you get both an instant heal and (if available) a regen, below 60% just the regen.
+The HP potion and regen potion are independent items on their own recasts, so a low-HP emergency drink can fire even while the regen potion is on cooldown. Priorities fall out naturally from the two thresholds: below 30% you get both an instant heal and (if available) a regen, below the current floor's regen threshold just the regen.
 
 ## Options
 
 - **Auto-use HP potion** + **below this HP %** (1-99, default 30)
-- **Auto-use regen potion** + **below this HP %** (1-99, default 60)
+- **Auto-use regen potion** + **below this HP %** for low floors (default 60), high floors (default 80), low boss floors (default 80), high boss floors (default 90); all 1-99
 - **Auto-use regen ability (Aurora / Equilibrium)** (default on)
 - **Auto-use Second Wind** (default on)

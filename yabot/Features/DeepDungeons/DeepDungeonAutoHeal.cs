@@ -21,7 +21,7 @@ namespace YABOT.Features.DeepDungeons
         public override string Name => "Auto-Heal (Potions & Regen)";
 
         public override string Description =>
-            "Inside a deep dungeon, automatically drinks the dungeon's HP potion (Max-Potion in PotD, Super-Potion in HoH, Hyper-Potion in Eureka Orthos, Ultra-Potion in Pilgrim's Traverse) when HP drops below a threshold, drinks the regen potion (Sustaining / Empyrean / Orthos / Pilgrim's Potion) below a higher threshold, and - on jobs that have one - keeps a self-targeted regen ability up (Gunbreaker's Aurora, Warrior's Equilibrium). On tanks and physical DPS it also fires Second Wind as an instant self-heal on low HP. Each use is retried every frame until it goes through, so a GCD or animation lock just delays it rather than skipping it.";
+            "Inside a deep dungeon, automatically drinks the dungeon's HP potion (Max-Potion in PotD, Super-Potion in HoH, Hyper-Potion in Eureka Orthos, Ultra-Potion in Pilgrim's Traverse) when HP drops below a threshold, drinks the regen potion (Sustaining / Empyrean / Orthos / Pilgrim's Potion) below a higher threshold that depends on the floor (low, high, and boss floors each have their own), and - on jobs that have one - keeps a self-targeted regen ability up (Gunbreaker's Aurora, Warrior's Equilibrium). On tanks and physical DPS it also fires Second Wind as an instant self-heal on low HP. Each use is retried every frame until it goes through, so a GCD or animation lock just delays it rather than skipping it.";
 
         public override FeatureType FeatureType => FeatureType.DeepDungeons;
 
@@ -30,7 +30,12 @@ namespace YABOT.Features.DeepDungeons
             public bool UseHpPotion = true;
             public int HpPotionThreshold = 30;
             public bool UseRegenPotion = true;
-            public int RegenPotionThreshold = 60;
+            // Regen threshold per floor tier. "High" starts at PotD 151 / other dungeons 71; boss
+            // floors are the multiples of 10 (DeepDungeonRespawn.IsBossFloor).
+            public int RegenPotionThreshold = 60;         // low floors
+            public int RegenPotionThresholdHigh = 80;
+            public int RegenPotionThresholdBossLow = 80;
+            public int RegenPotionThresholdBossHigh = 90;
             public bool UseRegenAbility = true;
             public bool UseSecondWind = true;
             public bool DisableWithPartyHealer = true;
@@ -154,8 +159,9 @@ namespace YABOT.Features.DeepDungeons
                     && !secondWindCovers)
                     TryUseItem(am, pots.Value.Heal, ref _hpPot, now);
 
-                // Regen potion under the higher threshold, unless Rehabilitation is already ticking.
-                if (!deferToHealer && Config.UseRegenPotion && pots.HasValue && hpPct < Config.RegenPotionThreshold
+                // Regen potion under the floor tier's threshold, unless Rehabilitation is already ticking.
+                if (!deferToHealer && Config.UseRegenPotion && pots.HasValue
+                    && hpPct < RegenThresholdFor(dd->DeepDungeonId, dd->Floor)
                     && !PlayerHasStatusNamed(player, RehabilitationStatus))
                     TryUseItem(am, pots.Value.Regen, ref _regenPot, now);
 
@@ -167,6 +173,21 @@ namespace YABOT.Features.DeepDungeons
             {
                 Svc.Log.Error(ex, $"[{Name}] update failed");
             }
+        }
+
+        // Pick the regen threshold for the current floor: low/high split at PotD 150 / others 70 (the
+        // boundary boss floor counts as low), boss floors are the multiples of 10.
+        private int RegenThresholdFor(byte deepDungeonId, int floor)
+        {
+            var high = floor > (deepDungeonId == 1 ? 150 : 70);
+            var boss = DeepDungeonRespawn.IsBossFloor(deepDungeonId, floor);
+            return (boss, high) switch
+            {
+                (false, false) => Config.RegenPotionThreshold,
+                (false, true) => Config.RegenPotionThresholdHigh,
+                (true, false) => Config.RegenPotionThresholdBossLow,
+                (true, true) => Config.RegenPotionThresholdBossHigh,
+            };
         }
 
         private static (uint Heal, uint Regen)? PotionsFor(byte deepDungeonId) => deepDungeonId switch
@@ -284,10 +305,16 @@ namespace YABOT.Features.DeepDungeons
 
             if (ImGui.Checkbox("Auto-use regen potion", ref Config.UseRegenPotion)) hasChanged = true;
             if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("Drink Sustaining (PotD) / Empyrean (HoH) / Orthos (EO) / Pilgrim's Potion (PT)\nwhen HP drops below the threshold, unless the Rehabilitation regen is already active.");
+                ImGui.SetTooltip("Drink Sustaining (PotD) / Empyrean (HoH) / Orthos (EO) / Pilgrim's Potion (PT)\nwhen HP drops below the threshold for the current floor, unless the Rehabilitation regen is already active.\nLow floors: PotD 1-150, others 1-70. High floors: PotD 151+, others 71+. Boss floors: every 10th.");
             ImGui.Indent();
             ImGui.SetNextItemWidth(200);
-            if (ImGui.SliderInt("below this HP %##regenpot", ref Config.RegenPotionThreshold, 1, 99)) hasChanged = true;
+            if (ImGui.SliderInt("below this HP % - low floors##regenpot", ref Config.RegenPotionThreshold, 1, 99)) hasChanged = true;
+            ImGui.SetNextItemWidth(200);
+            if (ImGui.SliderInt("below this HP % - high floors##regenpothigh", ref Config.RegenPotionThresholdHigh, 1, 99)) hasChanged = true;
+            ImGui.SetNextItemWidth(200);
+            if (ImGui.SliderInt("below this HP % - low boss floors##regenpotbosslow", ref Config.RegenPotionThresholdBossLow, 1, 99)) hasChanged = true;
+            ImGui.SetNextItemWidth(200);
+            if (ImGui.SliderInt("below this HP % - high boss floors##regenpotbosshigh", ref Config.RegenPotionThresholdBossHigh, 1, 99)) hasChanged = true;
             ImGui.Unindent();
 
             if (ImGui.Checkbox("Auto-use regen ability (Aurora / Equilibrium)", ref Config.UseRegenAbility)) hasChanged = true;
