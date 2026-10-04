@@ -151,9 +151,12 @@ namespace YABOT.Features.DeepDungeons
         private const double EmptyLingerSeconds = 2.0;
 
         // Pending "use a capped pomander?" prompt (Prompt mode). Holds the slot to use, the name to
-        // show, and an auto-dismiss time so a stale prompt doesn't linger.
+        // show, and an auto-dismiss time so a stale prompt doesn't linger. When the pomander's effect
+        // is already up (Intuition especially - it stays on until the hoard is found), using one would
+        // be a pure waste, so the prompt degrades to an info-only "already active" notice with an OK.
         private uint? _promptSlot;
         private string _promptName = string.Empty;
+        private bool _promptInfoOnly;
         private DateTime _promptExpiry;
         private const double PromptTimeoutSeconds = 15.0;
 
@@ -183,11 +186,10 @@ namespace YABOT.Features.DeepDungeons
         // (animation lock, etc.), so we retry until the slot count actually drops - the only proof it
         // landed - and only then arm the re-open. A use that never goes through opens nothing.
         // If the effect comes up before our use lands (a party member spent theirs), the use is
-        // dropped - burning ours on top would be a waste. Name + was-active baseline are captured
-        // at Yes time so the check tracks a transition, not an effect that was already up.
+        // dropped - burning ours on top would be a waste. The name is captured at Yes time for the
+        // status-based active check; the prompt never offers Yes while the effect is already up.
         private uint? _pendingUseSlot;
         private string _pendingUseName = string.Empty;
-        private bool _pendingUseWasActive;
         private byte _pendingUseCount;
         private DateTime _pendingUseDeadline;
         private DateTime _pendingUseLastTry = DateTime.MinValue;
@@ -329,14 +331,20 @@ namespace YABOT.Features.DeepDungeons
                     return;
                 _lastSelfChestInteract = DateTime.MinValue;
 
+                if (Config.CappedPomanderAction == CappedAction.Off) return;
+
+                // Effect already up: never spend one (auto or prompted), just tell the player why.
+                var alreadyActive = IsPomanderActive(dd, slot, shortName);
+
                 switch (Config.CappedPomanderAction)
                 {
-                    case CappedAction.AutoUse:
+                    case CappedAction.AutoUse when !alreadyActive:
                         dd->UsePomander((uint)slot);
                         break;
-                    case CappedAction.Prompt:
+                    default:
                         _promptSlot = (uint)slot;
                         _promptName = shortName;
+                        _promptInfoOnly = alreadyActive;
                         _promptExpiry = DateTime.Now.AddSeconds(PromptTimeoutSeconds);
                         // We're standing on the coffer right now, so the nearest one is the one we
                         // just tried. Capture it so a Yes can re-open it even if we drift a little.
@@ -511,7 +519,8 @@ namespace YABOT.Features.DeepDungeons
             }
         }
 
-        // Mid-screen Yes/No prompt (Prompt mode) asking whether to spend one of a capped pomander.
+        // Mid-screen Yes/No prompt (Prompt mode) asking whether to spend one of a capped pomander, or
+        // an OK-only "already active" notice when spending one would be wasted.
         private void DrawCappedPrompt(InstanceContentDeepDungeon* dd)
         {
             if (_promptSlot is not { } slot) return;
@@ -526,30 +535,40 @@ namespace YABOT.Features.DeepDungeons
             ImGui.SetNextWindowPos(center, ImGuiCond.Always, new Vector2(0.5f, 0.5f));
             ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(16, 14));
 
-            if (ImGui.Begin("Use pomander?###YABOTCappedPrompt",
+            var title = _promptInfoOnly ? "Pomander###YABOTCappedPrompt" : "Use pomander?###YABOTCappedPrompt";
+            if (ImGui.Begin(title,
                 ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoSavedSettings
                 | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoFocusOnAppearing))
             {
-                ImGui.TextUnformatted($"At max {_promptName}. Use one to free a slot?");
-                ImGui.Spacing();
-
-                if (ImGui.Button("Yes", new Vector2(120, 0)))
+                if (_promptInfoOnly)
                 {
-                    // Don't use (or re-open) inline: the use can be rejected. Hand it to the pending-use
-                    // tick, which retries until the slot count drops and only then arms the re-open, so
-                    // a use that never goes through never opens the coffer.
-                    _pendingUseSlot = slot;
-                    _pendingUseName = _promptName;
-                    _pendingUseWasActive = IsPomanderActive(dd, (int)slot, _promptName);
-                    _pendingUseCount = dd->Items[(int)slot].Count;
-                    _pendingUseDeadline = DateTime.Now.AddSeconds(UseTimeoutSeconds);
-                    _pendingUseLastTry = DateTime.MinValue;
-                    _pendingThenReopen = Config.ReopenCofferAfterUse && _promptChestId != 0;
-                    _promptSlot = null;
+                    ImGui.TextUnformatted($"At max {_promptName}. This effect is already active.");
+                    ImGui.Spacing();
+                    if (ImGui.Button("OK", new Vector2(120, 0)))
+                        _promptSlot = null;
                 }
-                ImGui.SameLine();
-                if (ImGui.Button("No", new Vector2(120, 0)))
-                    _promptSlot = null;
+                else
+                {
+                    ImGui.TextUnformatted($"At max {_promptName}. Use one to free a slot?");
+                    ImGui.Spacing();
+
+                    if (ImGui.Button("Yes", new Vector2(120, 0)))
+                    {
+                        // Don't use (or re-open) inline: the use can be rejected. Hand it to the
+                        // pending-use tick, which retries until the slot count drops and only then arms
+                        // the re-open, so a use that never goes through never opens the coffer.
+                        _pendingUseSlot = slot;
+                        _pendingUseName = _promptName;
+                        _pendingUseCount = dd->Items[(int)slot].Count;
+                        _pendingUseDeadline = DateTime.Now.AddSeconds(UseTimeoutSeconds);
+                        _pendingUseLastTry = DateTime.MinValue;
+                        _pendingThenReopen = Config.ReopenCofferAfterUse && _promptChestId != 0;
+                        _promptSlot = null;
+                    }
+                    ImGui.SameLine();
+                    if (ImGui.Button("No", new Vector2(120, 0)))
+                        _promptSlot = null;
+                }
             }
             ImGui.End();
 
@@ -597,7 +616,7 @@ namespace YABOT.Features.DeepDungeons
             // Never went through within the window, or someone else's use lit the effect up first ->
             // give up without touching the coffer.
             if (now > _pendingUseDeadline) { _pendingUseSlot = null; return; }
-            if (!_pendingUseWasActive && IsPomanderActive(dd, (int)slot, _pendingUseName))
+            if (IsPomanderActive(dd, (int)slot, _pendingUseName))
             {
                 _pendingUseSlot = null;
                 return;
@@ -1057,7 +1076,8 @@ namespace YABOT.Features.DeepDungeons
             // A flash takes the text color and adds the left arrows; otherwise fall back to the
             // resting color (green when active, default otherwise). The kind picks the arrow icon:
             // green for a fresh pickup, blue when we're capped on it.
-            var flashing = TryGetFlashColor(rowKey, out var flashColor, out var bounce, out var kind);
+            var restColor = isActive ? ActiveGreen : FlashWhite;
+            var flashing = TryGetFlashColor(rowKey, restColor, out var flashColor, out var bounce, out var kind);
             var color = flashing ? flashColor : (isActive ? ActiveGreen : (Vector4?)null);
             var arrowIcon = kind == FlashKind.Capped ? CappedArrowIconId : FlashArrowIconId;
             // Count rides the row color normally, but turns blue once it hits the carry cap.
@@ -1164,19 +1184,12 @@ namespace YABOT.Features.DeepDungeons
             if (color.HasValue) ImGui.PopStyleColor();
         }
 
-        // Resolves a row's text color: a transient blue<->white pulse right after pickup, otherwise
-        // green while active on the floor, otherwise default (null = no override).
-        private Vector4? GetRowColor(string name, bool isActive)
-        {
-            if (TryGetFlashColor(name, out var flash, out _, out _))
-                return flash;
-            return isActive ? ActiveGreen : (Vector4?)null;
-        }
-
         // True while the row is mid-flash; outputs the current pulsing text color, a 0..1 bounce
         // value (the arrows nudge right and back each period), and the flash kind (which selects the
         // arrow icon) so the marker arrows and the text share one timeline.
-        private bool TryGetFlashColor(string name, out Vector4 textColor, out float bounce, out FlashKind kind)
+        // restColor is the color the row settles back to (green when the effect is active, white
+        // otherwise), so the pulse reads blue<->green on an active row instead of blue<->white.
+        private bool TryGetFlashColor(string name, Vector4 restColor, out Vector4 textColor, out float bounce, out FlashKind kind)
         {
             textColor = default;
             bounce = 0f;
@@ -1191,11 +1204,11 @@ namespace YABOT.Features.DeepDungeons
                 return false;
             }
 
-            // Oscillate blue<->white several times, easing toward white as it ends so the text
-            // decays smoothly instead of cutting off mid-pulse.
+            // Oscillate blue<->rest several times, easing toward the rest color as it ends so the
+            // text decays smoothly instead of cutting off mid-pulse.
             var pulse = (float)(0.5 + 0.5 * Math.Sin(elapsed * Math.PI * 6));
             var fade = (float)(elapsed / FlashDuration);
-            textColor = Vector4.Lerp(Vector4.Lerp(FlashBlue, FlashWhite, pulse), FlashWhite, fade);
+            textColor = Vector4.Lerp(Vector4.Lerp(FlashBlue, restColor, pulse), restColor, fade);
             // Ease 0 -> 1 -> 0 over each bounce period for a repeated rightward nudge.
             var phase = (elapsed % FlashArrowBouncePeriod) / FlashArrowBouncePeriod;
             bounce = (float)Math.Sin(phase * Math.PI);
