@@ -165,25 +165,31 @@ public unsafe class FallGuysAoeOverlay : BaseFeature
         casting = current;
     }
 
+    // True for any point in front of the camera, on screen or not (ImGui clips the rest); points behind the
+    // camera project to garbage, so pieces touching them are skipped.
+    private static bool ToScreen(Vector3 world, out Vector2 screen) => Svc.GameGui.WorldToScreen(world, out screen, out _);
+
     private static void DrawLine(ImDrawListPtr dl, Vector3 a, Vector3 b, uint color)
     {
-        if (Svc.GameGui.WorldToScreen(a, out var sa) && Svc.GameGui.WorldToScreen(b, out var sb))
+        if (ToScreen(a, out var sa) && ToScreen(b, out var sb))
             dl.AddLine(sa, sb, color, 2);
     }
 
     private static void DrawAoe(ImDrawListPtr dl, Aoe aoe, uint color, uint fill, string? label)
     {
-        var pts = aoe.Outline();
-        var hasCenter = Svc.GameGui.WorldToScreen(aoe.Origin, out var center);
-        for (var i = 0; i < pts.Length; i++)
+        if (fill != 0)
         {
-            var b = pts[(i + 1) % pts.Length];
-            DrawLine(dl, pts[i], b, color);
-            // triangle fan from the center; skipped per triangle when part of it is off screen
-            if (fill != 0 && hasCenter && Svc.GameGui.WorldToScreen(pts[i], out var sa) && Svc.GameGui.WorldToScreen(b, out var sb))
-                dl.AddTriangleFilled(center, sa, sb, fill);
+            foreach (var (a, b, c, d) in aoe.FillPieces())
+            {
+                if (ToScreen(a, out var sa) && ToScreen(b, out var sb)
+                    && ToScreen(c, out var sc) && ToScreen(d, out var sd))
+                    dl.AddQuadFilled(sa, sb, sc, sd, fill);
+            }
         }
-        if (label != null && hasCenter)
+        var pts = aoe.Outline();
+        for (var i = 0; i < pts.Length; i++)
+            DrawLine(dl, pts[i], pts[(i + 1) % pts.Length], color);
+        if (label != null && ToScreen(aoe.Origin, out var center))
             dl.AddText(center - ImGui.CalcTextSize(label) / 2, color, label);
     }
 
@@ -255,12 +261,20 @@ public unsafe class FallGuysAoeOverlay : BaseFeature
         };
 
 
+        // Shapes are cut into ~1y pieces so only the parts behind the camera get dropped (a long slider rect
+        // drawn from 4 corners lost whole edges and fill triangles when one corner was behind the camera).
         public Vector3[] Outline()
         {
             if (!Circle)
             {
                 Vector3 f = Forward * R, r = Right * HalfWidth;
-                return [Origin - f - r, Origin + f - r, Origin + f + r, Origin - f + r];
+                Vector3[] corners = [Origin - f - r, Origin + f - r, Origin + f + r, Origin - f + r];
+                return corners.SelectMany((c, i) =>
+                {
+                    var next = corners[(i + 1) % 4];
+                    var n = (int)MathF.Ceiling(LengthXZ(next - c));
+                    return Enumerable.Range(0, n).Select(k => Vector3.Lerp(c, next, (float)k / n));
+                }).ToArray();
             }
             var pts = new Vector3[32];
             for (var i = 0; i < pts.Length; i++)
@@ -269,6 +283,26 @@ public unsafe class FallGuysAoeOverlay : BaseFeature
                 pts[i] = Origin + R * new Vector3(MathF.Sin(a), 0, MathF.Cos(a));
             }
             return pts;
+        }
+
+        // Fill as quads: circle = fan slices (center doubled), rect = strips across its length.
+        public IEnumerable<(Vector3, Vector3, Vector3, Vector3)> FillPieces()
+        {
+            if (Circle)
+            {
+                var pts = Outline();
+                for (var i = 0; i < pts.Length; i++)
+                    yield return (Origin, pts[i], pts[(i + 1) % pts.Length], Origin);
+                yield break;
+            }
+            var n = (int)MathF.Ceiling(2 * R);
+            var r = Right * HalfWidth;
+            for (var i = 0; i < n; i++)
+            {
+                var a = Origin + Forward * (-R + 2 * R * i / n);
+                var b = Origin + Forward * (-R + 2 * R * (i + 1) / n);
+                yield return (a - r, b - r, b + r, a + r);
+            }
         }
     }
 
