@@ -12,5 +12,6 @@ namespace YABOT.FeaturesSetup
         DeepDungeons,
         PluginMods,
         CosmicExploration,
+        Events,
     }
 }

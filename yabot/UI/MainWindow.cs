@@ -34,6 +34,7 @@ internal class MainWindow : Window
         ("Occult Crescent", FeatureType.OccultCrescent),
         ("Cosmic Exploration", FeatureType.CosmicExploration),
         ("Deep Dungeons", FeatureType.DeepDungeons),
+        ("Events", FeatureType.Events),
         ("Plugin Mods", FeatureType.PluginMods),
     };
 
