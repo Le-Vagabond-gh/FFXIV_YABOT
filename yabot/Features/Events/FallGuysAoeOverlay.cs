@@ -9,6 +9,7 @@ using FFXIVClientStructs.FFXIV.Client.Game.Character;
 using FFXIVClientStructs.FFXIV.Client.Game.Object;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Numerics;
 using YABOT.FeaturesSetup;
@@ -16,32 +17,39 @@ using YABOT.UI;
 
 namespace YABOT.Features.Events;
 
-// Port of the stage 3 AoE prediction from awgil/ffxiv_vfallguy (Map.cs, Map3.cs, Geom.cs).
+// Stage 3 is a port of the AoE prediction from awgil/ffxiv_vfallguy (Map.cs, Map3.cs, Geom.cs).
 // Upstream passes header->ActionType instead of header->ActionId to its action-effect handler, so only
 // the cast-driven rect sequence ever got timings; fixed here. vfallguy's voxel pathfinder is not ported:
 // upstream has it commented out and builds the path from the hand-written lane script kept below.
+// Stage 2 (crystal courier) is not in vfallguy; its data comes from our own recordings.
 public unsafe class FallGuysAoeOverlay : BaseFeature
 {
-    public override string Name => "Fall Guys Stage 3 AoE Markers";
+    public override string Name => "Fall Guys AoE Markers";
 
     public override string Description =>
-        "On the last stage of the Fall Guys collaboration event, outlines AoEs about to go off and draws the safe route through the lanes. " +
-        "Markers turn red when your current movement would put you inside an AoE as it fires, yellow otherwise. " +
-        "The route appears once the first few mechanics have been seen.";
+        "On stages 2 and 3 of the Fall Guys collaboration event, outlines obstacles about to go off with a countdown, filled red while dangerous. " +
+        "Outlines are green while safe and yellow just before they get dangerous. " +
+        "Stage 3 also draws a route through the lanes once the first few mechanics have been seen.";
 
     public override FeatureType FeatureType => FeatureType.Events;
 
     private const uint TerritoryId = 1165;
-    private const uint RectsCastId = 34812;
-    private const uint AoeSafeColor = 0xff00ffff; // ABGR yellow
+    private const float InvSpeed = 1f / 6; // run speed 6 y/s
+    private const float SafetyMargin = 0.5f; // AoEs count as this much bigger when predicting hits
+    // The server checks hits against where it last saw you, ~0.2s behind your screen (recordings: hit 1.2y outside
+    // a square at run speed), so treat AoEs as dangerous this long before their effect arrives.
+    private const float LatencyLead = 0.3f;
+    private const uint AoeSafeColor = 0xff00ff00; // ABGR green
+    private const uint AoeWarnColor = 0xff00ffff; // ABGR yellow
+    private const float WarnTime = 0.5f;          // seconds before getting dangerous that a marker turns yellow
     private const uint AoeHitColor = 0xff0000ff;  // ABGR red
     private const uint PathColor = 0xff00ff00;    // ABGR green
+    private const uint AoeActiveFill = 0x600000ff; // ABGR translucent red
 
     private Overlays Overlay = null!;
     private Hook<ActionEffectHandler.Delegates.Receive>? actionEffectHook;
-    private Stage3? stage;
+    private Stage? stage;
     private HashSet<ulong> casting = [];
-    private Vector3 prevPos;
 
     public override void Enable()
     {
@@ -89,36 +97,51 @@ public unsafe class FallGuysAoeOverlay : BaseFeature
         try
         {
             var pos = Player.Position;
-            var delta = pos - prevPos;
-            prevPos = pos;
-            if (pos.X is < -40 or > 40 || pos.Z is < 100 or > 350)
+            var stageType = pos switch
             {
-                stage = null;
+                { X: >= -40 and <= 40, Z: >= 100 and <= 350 } => typeof(Stage3),
+                { X: >= -250 and <= -150, Z: >= 195 and <= 285 } => typeof(Stage2),
+                _ => null,
+            };
+            if (stage?.GetType() != stageType)
+            {
+                stage = stageType != null ? (Stage)Activator.CreateInstance(stageType)! : null;
                 casting.Clear();
-                return;
             }
-            stage ??= new();
+            if (stage == null)
+                return;
             PollCasts();
 
             var dl = ImGui.GetBackgroundDrawList();
             var now = DateTime.Now;
 
-            // Path: waypoints run down the course (decreasing Z); skip the ones already passed.
+            // Route segments turn red when walking them without stopping, starting now, would put you in an AoE as it fires.
             var from = pos;
-            foreach (var wp in stage.BuildPath().Where(wp => wp.Z < pos.Z))
+            var startIn = 0f;
+            foreach (var wp in stage.BuildPath(pos))
             {
-                DrawLine(dl, from, wp, PathColor);
+                var seg = wp - from;
+                var len = LengthXZ(seg);
+                var hit = len > 0.01f && stage.Aoes.Any(a => HitWhileWalking(a, now, from, seg / len, startIn, len));
+                DrawLine(dl, from, wp, hit ? AoeHitColor : PathColor);
+                startIn += len * InvSpeed;
                 from = wp;
             }
 
-            Vector3? dir = LengthXZ(delta) > 0.001f ? delta / LengthXZ(delta) : null;
+            // Upcoming: outline with a countdown, green, yellow in the last WarnTime before it gets dangerous.
+            // Dangerous now: filled red.
             foreach (var aoe in stage.Aoes)
             {
-                if (aoe.NextActivation == default || (aoe.NextActivation - now).TotalSeconds >= 2.5)
+                var untilActivation = (float)(aoe.NextActivation - now).TotalSeconds;
+                if (aoe.NextActivation == default || untilActivation >= 2.5 || untilActivation < -aoe.Hold)
                     continue;
-                var (enter, exit) = dir is { } d ? aoe.Intersect(pos, d) : aoe.Contains(pos) ? (0f, float.PositiveInfinity) : (float.NaN, float.NaN);
-                var hitIn = float.IsNaN(enter) ? 0 : aoe.ActivatesBetween(now, enter * Stage3.InvSpeed - 0.1f, exit * Stage3.InvSpeed + 0.1f);
-                DrawAoe(dl, aoe, hitIn > 0 ? AoeHitColor : AoeSafeColor);
+                var untilDangerous = untilActivation - LatencyLead;
+                if (untilDangerous <= 0)
+                {
+                    DrawAoe(dl, aoe, AoeHitColor, AoeActiveFill, null);
+                    continue;
+                }
+                DrawAoe(dl, aoe, untilDangerous <= WarnTime ? AoeWarnColor : AoeSafeColor, 0, untilDangerous.ToString("0.0", CultureInfo.InvariantCulture));
             }
         }
         catch (Exception ex)
@@ -133,11 +156,11 @@ public unsafe class FallGuysAoeOverlay : BaseFeature
         var current = new HashSet<ulong>();
         foreach (var bc in Svc.Objects.OfType<IBattleChara>())
         {
-            if (!bc.IsCasting || bc.CastActionId != RectsCastId)
+            if (!bc.IsCasting)
                 continue;
             current.Add(bc.GameObjectId);
             if (!casting.Contains(bc.GameObjectId))
-                stage!.OnRectsCast(bc.Position);
+                stage!.OnCast(bc.CastActionId, bc.Position);
         }
         casting = current;
     }
@@ -148,84 +171,104 @@ public unsafe class FallGuysAoeOverlay : BaseFeature
             dl.AddLine(sa, sb, color, 2);
     }
 
-    private static void DrawAoe(ImDrawListPtr dl, Aoe aoe, uint color)
+    private static void DrawAoe(ImDrawListPtr dl, Aoe aoe, uint color, uint fill, string? label)
     {
-        Vector3[] pts;
-        if (aoe.Circle)
-        {
-            pts = new Vector3[32];
-            for (var i = 0; i < pts.Length; i++)
-            {
-                var a = i * 2 * MathF.PI / pts.Length;
-                pts[i] = aoe.Origin + aoe.R * new Vector3(MathF.Sin(a), 0, MathF.Cos(a));
-            }
-        }
-        else
-        {
-            var r = aoe.R;
-            pts = [aoe.Origin + new Vector3(-r, 0, -r), aoe.Origin + new Vector3(-r, 0, r), aoe.Origin + new Vector3(r, 0, r), aoe.Origin + new Vector3(r, 0, -r)];
-        }
+        var pts = aoe.Outline();
+        var hasCenter = Svc.GameGui.WorldToScreen(aoe.Origin, out var center);
         for (var i = 0; i < pts.Length; i++)
-            DrawLine(dl, pts[i], pts[(i + 1) % pts.Length], color);
+        {
+            var b = pts[(i + 1) % pts.Length];
+            DrawLine(dl, pts[i], b, color);
+            // triangle fan from the center; skipped per triangle when part of it is off screen
+            if (fill != 0 && hasCenter && Svc.GameGui.WorldToScreen(pts[i], out var sa) && Svc.GameGui.WorldToScreen(b, out var sb))
+                dl.AddTriangleFilled(center, sa, sb, fill);
+        }
+        if (label != null && hasCenter)
+            dl.AddText(center - ImGui.CalcTextSize(label) / 2, color, label);
+    }
+
+    // Walking from start along dir for at most maxDist, setting off startIn seconds from now: is the aoe
+    // dangerous while we're inside it (with a 0.1s window on both sides)?
+    private static bool HitWhileWalking(Aoe aoe, DateTime now, Vector3 start, Vector3 dir, float startIn, float maxDist)
+    {
+        var (enter, exit) = aoe.Intersect(start, dir);
+        if (float.IsNaN(enter))
+            return false;
+        enter = Math.Max(enter, 0);
+        exit = Math.Min(exit, maxDist);
+        return enter <= exit && aoe.DangerousDuring(now, startIn + enter * InvSpeed - 0.1f, startIn + exit * InvSpeed + 0.1f);
     }
 
     private static float DotXZ(Vector3 a, Vector3 b) => a.X * b.X + a.Z * b.Z;
     private static float LengthXZ(Vector3 v) => MathF.Sqrt(DotXZ(v, v));
 
-    // Circle: R = radius. Square: R = half-side.
-    private sealed class Aoe(bool circle, float r, Vector3 origin, float seqDelay)
+    // Circle: R = radius. Rect: centered on Origin, R = half-length along Rotation, HalfWidth across it
+    // (halfWidth < 0 means a square). Rotation follows the game: 0 faces +Z, direction = (sin, cos).
+    private sealed class Aoe(bool circle, float r, Vector3 origin, float seqDelay = 0, float halfWidth = -1, float rotation = 0)
     {
         public readonly bool Circle = circle;
         public readonly float R = r;
+        public readonly float HalfWidth = halfWidth < 0 ? r : halfWidth;
         public readonly Vector3 Origin = origin;
+        public readonly Vector3 Forward = new(MathF.Sin(rotation), 0, MathF.Cos(rotation));
+        public readonly Vector3 Right = new(MathF.Cos(rotation), 0, -MathF.Sin(rotation));
         public readonly float SeqDelay = seqDelay; // delay until the next aoe in the sequence
         public float Repeat;                       // seconds between activations of this aoe
+        public float Hold = 0.3f;                  // stays dangerous this long after activation (e.g. a charge still travelling)
         public DateTime NextActivation;
 
-        private float TimeUntilNextActivation(DateTime now)
+        // Is it dangerous at any point between from and to (seconds from now)? Each activation is dangerous
+        // for [activation - LatencyLead, activation + Hold], repeating every Repeat seconds.
+        public bool DangerousDuring(DateTime now, float from, float to)
         {
-            if (NextActivation == default)
-                return float.MaxValue;
-            var t = (float)(NextActivation - now).TotalSeconds;
-            return t >= 0 ? t : t % Repeat + Repeat;
-        }
-
-        // negative if it doesn't fire in [min, max] seconds from now, otherwise seconds between min and activation
-        public float ActivatesBetween(DateTime now, float min, float max)
-        {
-            if (max < 0)
-                return -1;
-            min = Math.Max(0, min);
-            var t = TimeUntilNextActivation(now.AddSeconds(min));
-            return t < max - min ? t : -1;
+            if (NextActivation == default || to < 0)
+                return false;
+            var a = (float)(NextActivation - now).TotalSeconds - LatencyLead;
+            var len = LatencyLead + Hold;
+            if (a + len < from && Repeat > 0)
+                a += MathF.Ceiling((from - a - len) / Repeat) * Repeat;
+            return a <= to && a + len >= from;
         }
 
         // distances along dir where the ray enters/exits the shape (NaN if it misses)
+        // Intersect uses the shape grown by SafetyMargin; Outline draws the real shape.
         public (float enter, float exit) Intersect(Vector3 start, Vector3 dir)
         {
             var oa = start - Origin;
             if (Circle)
             {
+                var r = R + SafetyMargin;
                 var b = DotXZ(dir, oa);
-                var d = MathF.Sqrt(b * b - DotXZ(oa, oa) + R * R);
+                var d = MathF.Sqrt(b * b - DotXZ(oa, oa) + r * r);
                 return (-b - d, -b + d);
             }
-            var (ex, xx) = Slab(oa.X, dir.X);
-            var (ez, xz) = Slab(oa.Z, dir.Z);
+            var (ex, xx) = Slab(DotXZ(oa, Right), DotXZ(dir, Right), HalfWidth + SafetyMargin);
+            var (ez, xz) = Slab(DotXZ(oa, Forward), DotXZ(dir, Forward), R + SafetyMargin);
             return float.IsNaN(ex) || float.IsNaN(ez) ? (float.NaN, float.NaN) : (Math.Max(ex, ez), Math.Min(xx, xz));
         }
 
-        private (float, float) Slab(float o, float d) => d switch
+        private static (float, float) Slab(float o, float d, float h) => d switch
         {
-            > 0.05f => ((-R - o) / d, (R - o) / d),
-            < -0.05f => ((R - o) / d, (-R - o) / d),
-            _ => Math.Abs(o) <= R ? (float.MinValue, float.MaxValue) : (float.NaN, float.NaN),
+            > 0.05f => ((-h - o) / d, (h - o) / d),
+            < -0.05f => ((h - o) / d, (-h - o) / d),
+            _ => Math.Abs(o) <= h ? (float.MinValue, float.MaxValue) : (float.NaN, float.NaN),
         };
 
-        public bool Contains(Vector3 p)
+
+        public Vector3[] Outline()
         {
-            var d = p - Origin;
-            return Circle ? DotXZ(d, d) <= R * R : Math.Max(Math.Abs(d.X), Math.Abs(d.Z)) <= R;
+            if (!Circle)
+            {
+                Vector3 f = Forward * R, r = Right * HalfWidth;
+                return [Origin - f - r, Origin + f - r, Origin + f + r, Origin - f + r];
+            }
+            var pts = new Vector3[32];
+            for (var i = 0; i < pts.Length; i++)
+            {
+                var a = i * 2 * MathF.PI / pts.Length;
+                pts[i] = Origin + R * new Vector3(MathF.Sin(a), 0, MathF.Cos(a));
+            }
+            return pts;
         }
     }
 
@@ -236,11 +279,20 @@ public unsafe class FallGuysAoeOverlay : BaseFeature
         public int FirstIndex = -1; // index of the first aoe seen firing, drives the lane choice
     }
 
-    private sealed class Stage3
+    private abstract class Stage
     {
-        public const float InvSpeed = 1f / 6; // run speed 6 y/s
-
         public readonly List<Aoe> Aoes = [];
+
+        public abstract void OnActionEffect(uint actionId, Vector3 casterPos);
+        public virtual void OnCast(uint actionId, Vector3 casterPos) { }
+
+        // waypoints to draw after the player's position; stage 2 has no route (timing is what matters there)
+        public virtual IEnumerable<Vector3> BuildPath(Vector3 playerPos) => [];
+    }
+
+    private sealed class Stage3 : Stage
+    {
+        private const uint RectsCastId = 34812;
 
         private readonly Sequence mech1Rotating, mech2Exaflares, mech3Rotating, mech3Exaflares;
         private readonly Sequence mech4RectsL, mech4RectsR, mech4RectsC, mech4Exaflare;
@@ -254,26 +306,28 @@ public unsafe class FallGuysAoeOverlay : BaseFeature
             (236.8f, 13.5f), (262.9f, 6.0f), (273.2f, 6.0f), (286.9f, 3.2f),
         ];
 
+        // Gaps measured from our own recording (upstream's were 1.2 / 1.0 for the rotating circles, 1.4 for exaflares,
+        // 0.5 / 1.1 / 4.2 for the rects and 2.5 for the pairs, with the long single-exaflare gap after the wrong one).
         public Stage3()
         {
-            mech1Rotating = Rotating(1.2f, 6, 267.5f, -10, 10);
+            mech1Rotating = Rotating(1.27f, 6, 267.5f, -10, 10);
             mech2Exaflares = DoubleExaflare(9.39f, 251, 11.75f, 243);
-            mech3Rotating = Rotating(1.0f, 14.76f, 225.3f, -10, 0, 10);
+            mech3Rotating = Rotating(1.09f, 14.76f, 225.3f, -10, 0, 10);
             mech3Exaflares = DoubleExaflare(14.54f, 229.3f, 14.97f, 221.3f);
             mech4RectsL = Rects(-12, -6);
             mech4RectsR = Rects(12, 6);
             mech4RectsC = RectsCenter();
-            mech4Exaflare = SingleExaflare(22.52f, 198.7f, -12, -4, 4, 12);
+            mech4Exaflare = SingleExaflare(22.52f, 198.7f, (-12, 1.354f), (-4, 1.868f), (4, 1.405f), (12, 1.383f));
             mech5PairL1 = Pairs(5, new(-10, 29.95f, 170), new(-2, 29.95f, 170));
             mech5PairL2 = Pairs(5, new(-10, 31.39f, 156), new(-4.34f, 30.81f, 161.66f));
             mech5PairR1 = Pairs(5, new(10, 29.95f, 170), new(4.34f, 29.37f, 175.66f));
             mech5PairR2 = Pairs(5, new(10, 31.39f, 156), new(2, 31.39f, 156));
-            mech6Exaflare = SingleExaflare(33.47f, 145.7f, -4, 4, 12, -12);
+            mech6Exaflare = SingleExaflare(33.47f, 145.7f, (-4, 1.405f), (4, 1.383f), (12, 1.354f), (-12, 1.868f));
             mech7PairL = Pairs(3, new(-6.78f, 35.91f, 136.91f), new(-3.22f, 36.30f, 135.09f));
             mech7PairR = Pairs(3, new(6.78f, 35.91f, 136.91f), new(3.22f, 36.30f, 135.09f));
         }
 
-        public void OnActionEffect(uint actionId, Vector3 casterPos)
+        public override void OnActionEffect(uint actionId, Vector3 casterPos)
         {
             switch (actionId)
             {
@@ -296,9 +350,16 @@ public unsafe class FallGuysAoeOverlay : BaseFeature
             }
         }
 
-        public void OnRectsCast(Vector3 casterPos) => Update(casterPos, 1, mech4RectsL, mech4RectsR);
+        public override void OnCast(uint actionId, Vector3 casterPos)
+        {
+            if (actionId == RectsCastId)
+                Update(casterPos, 1, mech4RectsL, mech4RectsR);
+        }
 
-        public List<Vector3> BuildPath()
+        // The course runs down (decreasing Z); skip the waypoints already passed.
+        public override IEnumerable<Vector3> BuildPath(Vector3 playerPos) => Waypoints().Where(wp => wp.Z < playerPos.Z);
+
+        private List<Vector3> Waypoints()
         {
             var res = new List<Vector3>();
             if (mech2Exaflares.FirstIndex < 0 || mech3Exaflares.FirstIndex < 0 || mech4RectsL.FirstIndex < 0 || mech4Exaflare.FirstIndex < 0)
@@ -383,22 +444,17 @@ public unsafe class FallGuysAoeOverlay : BaseFeature
                 if (Aoes[c.Start].NextActivation == default)
                     c.FirstIndex = index;
 
-                // a cast start means 'index' fires in activateIn; an effect means 'index' just fired
-                var next = activateIn > 0 ? index : (index + 1) % c.Count;
+                // A cast start means 'index' fires in activateIn; an effect means 'index' just fired (its own next
+                // activation is then a full cycle away). SeqDelay is the gap to the following aoe - upstream applied
+                // it as the gap from the previous one on effects, shifting every prediction by one step.
                 var t = DateTime.Now.AddSeconds(activateIn);
-                for (var i = 0; i < c.Count; i++)
+                if (activateIn > 0)
+                    Aoes[c.Start + index].NextActivation = t;
+                var n = activateIn > 0 ? c.Count - 1 : c.Count;
+                for (var i = 1; i <= n; i++)
                 {
-                    var aoe = Aoes[c.Start + (next + i) % c.Count];
-                    if (activateIn > 0)
-                    {
-                        aoe.NextActivation = t;
-                        t = t.AddSeconds(aoe.SeqDelay);
-                    }
-                    else
-                    {
-                        t = t.AddSeconds(aoe.SeqDelay);
-                        aoe.NextActivation = t;
-                    }
+                    t = t.AddSeconds(Aoes[c.Start + (index + i - 1) % c.Count].SeqDelay);
+                    Aoes[c.Start + (index + i) % c.Count].NextActivation = t;
                 }
                 return;
             }
@@ -418,26 +474,117 @@ public unsafe class FallGuysAoeOverlay : BaseFeature
         private Sequence Rotating(float repeat, float y, float z, params float[] xs) =>
             Create(true, 5, xs.Select(x => (new Vector3(x, y, z), repeat)));
 
-        private Sequence SingleExaflare(float y, float z, params float[] xs) =>
-            Create(true, 6, xs.Select(x => (new Vector3(x, y, z), x == xs[^1] ? 1.9f : 1.4f)));
+        // (x, gap until the next one) in firing order
+        private Sequence SingleExaflare(float y, float z, params (float x, float gap)[] xs) =>
+            Create(true, 6, xs.Select(e => (new Vector3(e.x, y, z), e.gap)));
 
         private Sequence DoubleExaflare(float y1, float z1, float y2, float z2)
         {
             float[] xs = [-12, -4, 4, 12];
-            return Create(true, 6, xs.Select(x => (new Vector3(x, y1, z1), 1.4f)).Concat(xs.Select(x => (new Vector3(x, y2, z2), 1.4f))));
+            return Create(true, 6, xs.Select(x => (new Vector3(x, y1, z1), 1.38f)).Concat(xs.Select(x => (new Vector3(x, y2, z2), 1.38f))));
         }
 
         private static readonly (float y, float z)[] RectRows = [(25.59f, 190.4f), (23.37f, 196.4f), (21.15f, 202.4f), (18.94f, 208.4f), (16.73f, 214.4f)];
 
+        // Rects fire in waves down the ramp (0.46s per row), alternating between the outer (+-12, 0) and inner (+-6) lanes.
         private Sequence Rects(float x1, float x2)
         {
-            IEnumerable<(Vector3, float)> Lane(float x) => RectRows.Select((e, i) => (new Vector3(x, e.y, e.z), i == RectRows.Length - 1 ? 1.1f : 0.5f));
+            IEnumerable<(Vector3, float)> Lane(float x) => RectRows.Select((e, i) => (new Vector3(x, e.y, e.z), i == RectRows.Length - 1 ? 1.13f : 0.46f));
             return Create(false, 3, Lane(x1).Concat(Lane(x2)));
         }
 
         private Sequence RectsCenter() =>
-            Create(false, 3, RectRows.Select((e, i) => (new Vector3(0, e.y, e.z), i == RectRows.Length - 1 ? 4.2f : 0.5f)));
+            Create(false, 3, RectRows.Select((e, i) => (new Vector3(0, e.y, e.z), i == RectRows.Length - 1 ? 4.1f : 0.46f)));
 
-        private Sequence Pairs(float r, Vector3 p1, Vector3 p2) => Create(true, r, [(p1, 2.5f), (p2, 2.5f)]);
+        private Sequence Pairs(float r, Vector3 p1, Vector3 p2) => Create(true, r, [(p1, 2.54f), (p2, 2.54f)]);
+    }
+
+    // Stage 2 (crystal courier): a hub with three lanes (north, east, west), each ending at a goal. Every obstacle
+    // repeats on a fixed cycle, so each one's next activation is predicted from its own previous ones.
+    // Shapes from the Action sheet: CastType 12 = rect centered on the caster, EffectRange long and
+    // XAxisModifier wide (matches stage 3's 6x6 squares); CastType 8 = charge from caster to target.
+    // Positions and periods measured from recordings; 34800 (the north goal's pulse) is not an obstacle.
+    private sealed class Stage2 : Stage
+    {
+        private const uint SweeperId = 34716; // 3x2 rects, three in a row firing as a sweep out and back
+        private const uint SquareId = 34799;  // 4x4 squares
+        private const uint SliderId = 34774;  // block charging between two endpoints, 3 wide
+        private const float SweeperPeriod = 4.205f;
+
+        private sealed class Timed(uint actionId, Vector3 firePos, Aoe aoe, float period, int perCycle)
+        {
+            public readonly uint ActionId = actionId;
+            public readonly Vector3 FirePos = firePos; // caster position reported when it fires
+            public readonly Aoe Aoe = aoe;
+            public readonly float Period = period;
+            public readonly int PerCycle = perCycle;   // activations per period (sweeper pieces fire on the way out and back)
+            public readonly List<DateTime> Fired = [];
+        }
+
+        private readonly List<Timed> timed = [];
+
+        public Stage2()
+        {
+            // north
+            Sweeper(1.5708f, new(-203, 6, 226.9f), new(-200, 6, 226.9f), new(-197, 6, 226.9f));
+            Squares(3.70f, 0, new(-204, 6, 216.5f), new(-196, 6, 216.5f));
+            // east
+            Sweeper(-0.5236f, new(-187.13f, 6, 255.99f), new(-188.63f, 6, 258.59f), new(-190.13f, 6, 261.19f));
+            Sweeper(-0.5236f, new(-168.04f, 6, 266.99f), new(-169.54f, 6, 269.59f), new(-171.03f, 6, 272.19f));
+            Slider(8.018f, new(-169.68f, 6, 267.78f), new(-187.0f, 6, 257.77f));
+            Slider(8.018f, new(-169.24f, 6, 264.56f), new(-184.53f, 6, 255.73f));
+            Slider(5.974f, new(-176.55f, 6, 259.69f), new(-181.66f, 6, 268.48f));
+            Slider(8.018f, new(-188.5f, 6, 260.37f), new(-171.19f, 6, 270.34f));
+            Slider(8.018f, new(-188.96f, 6, 263.57f), new(-173.75f, 6, 272.36f));
+            // west
+            Squares(4.101f, 2.0944f, new(-214.68f, 6, 255.91f), new(-212.73f, 6, 259.4f), new(-210.69f, 6, 262.86f));
+            Squares(4.101f, 2.0944f, new(-228.55f, 6, 263.9f), new(-226.6f, 6, 267.39f), new(-224.56f, 6, 270.85f));
+            Slider(8.018f, new(-221.03f, 6, 269.97f), new(-226.12f, 6, 261.13f));
+            Slider(8.018f, new(-218.43f, 6, 268.47f), new(-223.5f, 6, 259.66f));
+            Slider(5.974f, new(-207.18f, 6, 261.94f), new(-212.24f, 6, 253.16f));
+            Aoes.AddRange(timed.Select(t => t.Aoe));
+        }
+
+        public override void OnActionEffect(uint actionId, Vector3 casterPos)
+        {
+            var t = timed.FirstOrDefault(t => t.ActionId == actionId && LengthXZ(t.FirePos - casterPos) < 1);
+            if (t == null)
+                return;
+            t.Fired.Add(DateTime.Now);
+            if (t.Fired.Count > t.PerCycle)
+                t.Fired.RemoveAt(0);
+            if (t.Fired.Count == t.PerCycle)
+                t.Aoe.NextActivation = t.Fired[0].AddSeconds(t.Period);
+        }
+
+        private void Add(uint actionId, Vector3 firePos, Aoe aoe, float period, int perCycle)
+        {
+            aoe.Repeat = period / perCycle;
+            timed.Add(new(actionId, firePos, aoe, period, perCycle));
+        }
+
+        private void Sweeper(float rot, params Vector3[] pieces)
+        {
+            foreach (var p in pieces)
+                Add(SweeperId, p, new Aoe(false, 1.5f, p, halfWidth: 1, rotation: rot), SweeperPeriod, 2);
+        }
+
+        // Squares stay dangerous after firing: a recording has a stun walking in 0.6s after one fired with
+        // nobody in it, while crossings 2.4s+ after a firing were clean.
+        private void Squares(float period, float rot, params Vector3[] squares)
+        {
+            foreach (var p in squares)
+                Add(SquareId, p, new Aoe(false, 2, p, rotation: rot) { Hold = 1.0f }, period, 1);
+        }
+
+        // The block charges a -> b, then b -> a half a period later; it is reported at the start of each charge.
+        // The rect covers the travelled segment plus the block's own size at both ends, and stays shown while it travels.
+        private void Slider(float period, Vector3 a, Vector3 b)
+        {
+            var ab = b - a;
+            var rot = MathF.Atan2(ab.X, ab.Z);
+            foreach (var from in new[] { a, b })
+                Add(SliderId, from, new Aoe(false, LengthXZ(ab) / 2 + 1.5f, (a + b) / 2, halfWidth: 1.5f, rotation: rot) { Hold = 0.6f }, period, 1);
+        }
     }
 }
