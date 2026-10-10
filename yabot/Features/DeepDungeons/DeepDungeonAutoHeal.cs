@@ -36,6 +36,9 @@ namespace YABOT.Features.DeepDungeons
             public int RegenPotionThresholdHigh = 80;
             public int RegenPotionThresholdBossLow = 80;
             public int RegenPotionThresholdBossHigh = 90;
+            public bool RegenPotionAlwaysBossHigh = false; // in combat, ignore HP on high boss floors
+            // ...per dungeon, indexed by DeepDungeonId - 1 (PotD, HoH, EO, PT).
+            public bool[] RegenPotionAlwaysBossHighIn = { true, false, false, false };
             public bool UseRegenAbility = true;
             public bool UseSecondWind = true;
             public bool DisableWithPartyHealer = true;
@@ -161,7 +164,7 @@ namespace YABOT.Features.DeepDungeons
 
                 // Regen potion under the floor tier's threshold, unless Rehabilitation is already ticking.
                 if (!deferToHealer && Config.UseRegenPotion && pots.HasValue
-                    && hpPct < RegenThresholdFor(dd->DeepDungeonId, dd->Floor)
+                    && hpPct < RegenThresholdFor(dd->DeepDungeonId, dd->Floor, inCombat)
                     && !PlayerHasStatusNamed(player, RehabilitationStatus))
                     TryUseItem(am, pots.Value.Regen, ref _regenPot, now);
 
@@ -176,8 +179,10 @@ namespace YABOT.Features.DeepDungeons
         }
 
         // Pick the regen threshold for the current floor: low/high split at PotD 150 / others 70 (the
-        // boundary boss floor counts as low), boss floors are the multiples of 10.
-        private int RegenThresholdFor(byte deepDungeonId, int floor)
+        // boundary boss floor counts as low), boss floors are the multiples of 10. "Always active" on
+        // high boss floors returns 101 in combat so any HP passes the check; out of combat it falls
+        // back to the slider so the regen isn't spent on the walk to the boss.
+        private int RegenThresholdFor(byte deepDungeonId, int floor, bool inCombat)
         {
             var high = floor > (deepDungeonId == 1 ? 150 : 70);
             var boss = DeepDungeonRespawn.IsBossFloor(deepDungeonId, floor);
@@ -186,6 +191,9 @@ namespace YABOT.Features.DeepDungeons
                 (false, false) => Config.RegenPotionThreshold,
                 (false, true) => Config.RegenPotionThresholdHigh,
                 (true, false) => Config.RegenPotionThresholdBossLow,
+                (true, true) when Config.RegenPotionAlwaysBossHigh && inCombat
+                    && deepDungeonId - 1 < Config.RegenPotionAlwaysBossHighIn.Length
+                    && Config.RegenPotionAlwaysBossHighIn[deepDungeonId - 1] => 101,
                 (true, true) => Config.RegenPotionThresholdBossHigh,
             };
         }
@@ -293,6 +301,8 @@ namespace YABOT.Features.DeepDungeons
             return false;
         }
 
+        private static readonly string[] DungeonShortNames = { "PotD", "HoH", "EO", "PT" };
+
         protected override DrawConfigDelegate DrawConfigTree => (ref bool hasChanged) =>
         {
             if (ImGui.Checkbox("Auto-use HP potion", ref Config.UseHpPotion)) hasChanged = true;
@@ -315,6 +325,19 @@ namespace YABOT.Features.DeepDungeons
             if (ImGui.SliderInt("below this HP % - low boss floors##regenpotbosslow", ref Config.RegenPotionThresholdBossLow, 1, 99)) hasChanged = true;
             ImGui.SetNextItemWidth(200);
             if (ImGui.SliderInt("below this HP % - high boss floors##regenpotbosshigh", ref Config.RegenPotionThresholdBossHigh, 1, 99)) hasChanged = true;
+            if (ImGui.Checkbox("keep always active on high boss floors, regardless of current HP##regenpotbosshighalways", ref Config.RegenPotionAlwaysBossHigh)) hasChanged = true;
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("On high boss floors, keep Rehabilitation up during combat no matter your HP.\nOut of combat the slider threshold still applies.");
+            if (Config.RegenPotionAlwaysBossHigh)
+            {
+                ImGui.Indent();
+                for (var i = 0; i < Config.RegenPotionAlwaysBossHighIn.Length && i < DungeonShortNames.Length; i++)
+                {
+                    if (i > 0) ImGui.SameLine();
+                    if (ImGui.Checkbox($"{DungeonShortNames[i]}##regenpotalways{i}", ref Config.RegenPotionAlwaysBossHighIn[i])) hasChanged = true;
+                }
+                ImGui.Unindent();
+            }
             ImGui.Unindent();
 
             if (ImGui.Checkbox("Auto-use regen ability (Aurora / Equilibrium)", ref Config.UseRegenAbility)) hasChanged = true;
