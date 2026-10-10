@@ -22,7 +22,7 @@ namespace YABOT.FeaturesSetup
             var changed = false;
 
             if (!string.IsNullOrEmpty(name))
-                ImGui.TextUnformatted(name);
+                ImGui.TextUnformatted(name.Split("##")[0]); // name carries an ImGui "##id" suffix
 
             foreach (var value in Enum.GetValues(type))
             {

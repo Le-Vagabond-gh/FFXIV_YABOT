@@ -105,7 +105,7 @@ namespace YABOT.Features.DeepDungeons
         private const uint HqOffset = 1_000_000;
 
         // Per-item in-flight tracking for the insistent retry above.
-        private struct ItemUse
+        internal struct ItemUse
         {
             public int CountAtUse;   // inventory count when we last fired (0 = nothing in flight)
             public DateTime FiredAt;
@@ -207,11 +207,20 @@ namespace YABOT.Features.DeepDungeons
             _ => null,
         };
 
+        internal static uint? RegenPotionFor(byte deepDungeonId) => PotionsFor(deepDungeonId)?.Regen;
+
+        // Held count across both qualities.
+        internal static int HeldCount(uint itemId)
+        {
+            var inv = InventoryManager.Instance();
+            return inv == null ? 0 : inv->GetInventoryItemCount(itemId, false) + inv->GetInventoryItemCount(itemId, true);
+        }
+
         // Drink an item, retrying every frame until it actually goes on recast. UseAction can return
         // true while the use is silently dropped, so the only signals we trust are GetActionStatus
         // flipping to non-zero (on recast = it landed) and the inventory count dropping. Everything
         // else just means "keep trying".
-        private static void TryUseItem(ActionManager* am, uint itemId, ref ItemUse use, DateTime now)
+        internal static void TryUseItem(ActionManager* am, uint itemId, ref ItemUse use, DateTime now)
         {
             var inv = InventoryManager.Instance();
             if (inv == null) return;

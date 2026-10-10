@@ -37,3 +37,7 @@ The **Debug: show raw passage counter** option adds a `Raw  N` segment showing t
 The **Show respawn timer** option estimates when mobs next respawn on the current floor (`mm:ss`, tinted amber in the final few seconds). The game struct exposes no respawn countdown, so this is dead-reckoned the same way NecroLens does: each 10-floor set has a fixed respawn interval (see `DeepDungeonRespawn`), and the clock is anchored to when the player entered the floor - detected by watching `dd->Floor` change. Because the anchor is floor entry, enabling the overlay mid-floor makes the first cycle read early until the next floor transition re-anchors it.
 
 All three segments are suppressed on boss/transition floors (every 10th) and Eureka Orthos' floor 99, which have neither a passage nor respawns - you advance via the boss there (`DeepDungeonRespawn.IsBossFloor`). When the panel is right-aligned, the whole status line hugs the right edge as a group.
+
+## Sustaining Potion before Lust
+
+With **Use / refresh the Sustaining Potion before clicking Pomander of Lust (succubus)** on, clicking Pomander of Lust in the overlay first drinks a Sustaining Potion (even if its regen is already running, so it starts fresh for the succubus form), then uses Lust once the drink goes through. With no potion in your inventory, Lust is used right away; if the potion can't be drunk (still on cooldown), Lust is used anyway after a few seconds. Using Lust from the game's own pomander menu is not affected.

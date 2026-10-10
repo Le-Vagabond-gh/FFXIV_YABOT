@@ -74,6 +74,9 @@ namespace YABOT.Features.DeepDungeons
             public bool ReopenCofferAfterUse = false;
 
             public bool ShouldShowReopenCofferAfterUse() => CappedPomanderAction == CappedAction.Prompt;
+
+            [FeatureConfigOption("Use / refresh the Sustaining Potion before clicking Pomander of Lust (succubus)")]
+            public bool RegenBeforeLust = false;
         }
 
         // What to do when a coffer can't be picked up because we're capped on that pomander.
@@ -198,6 +201,17 @@ namespace YABOT.Features.DeepDungeons
         private bool _pendingThenReopen;
         private const double UseTimeoutSeconds = 3.0;
         private const double UseTryThrottleSeconds = 0.5;
+
+        // RegenBeforeLust: a Lust click first drinks the dungeon's regen potion (always, to refresh
+        // Rehabilitation for the succubus form), then hands Lust to the pending-use tick once the
+        // potion count drops. No potion held -> Lust right away; potion on recast or never landing ->
+        // Lust anyway after the deadline.
+        private const uint LustRowId = 13; // DeepDungeonItem "Pomander of Lust" (PotD only)
+        private uint? _lustSlot;
+        private int _lustPotCount;
+        private DateTime _lustDeadline;
+        private DeepDungeonAutoHeal.ItemUse _lustPot;
+        private const double LustPotionWaitSeconds = 5.0;
 
         // Pickup = green arrows when a count went up; Capped = blue arrows when the game told us we
         // can't carry any more of that item (returned to the coffer), hinting to use one first.
@@ -512,6 +526,7 @@ namespace YABOT.Features.DeepDungeons
                 ImGui.PopStyleColor();
 
                 DrawCappedPrompt(dd);
+                TickLustPotion(dd);
                 TickPendingUse(dd);
                 TickReopenCoffer();
             }
@@ -595,14 +610,54 @@ namespace YABOT.Features.DeepDungeons
         // up, someone beat us to it" cancel doesn't fire on an effect that was up from the start.
         private void QueuePendingUse(InstanceContentDeepDungeon* dd, uint slot, bool refresh)
         {
+            QueueUse(dd, slot, _promptName, refresh, Config.ReopenCofferAfterUse && _promptChestId != 0);
+            _promptSlot = null;
+        }
+
+        private void QueueUse(InstanceContentDeepDungeon* dd, uint slot, string name, bool refresh, bool thenReopen)
+        {
             _pendingUseSlot = slot;
-            _pendingUseName = _promptName;
+            _pendingUseName = name;
             _pendingUseRefresh = refresh;
             _pendingUseCount = dd->Items[(int)slot].Count;
             _pendingUseDeadline = DateTime.Now.AddSeconds(UseTimeoutSeconds);
             _pendingUseLastTry = DateTime.MinValue;
-            _pendingThenReopen = Config.ReopenCofferAfterUse && _promptChestId != 0;
-            _promptSlot = null;
+            _pendingThenReopen = thenReopen;
+        }
+
+        // Row click: Lust goes through the potion pre-drink when enabled and a potion is held.
+        private void UsePomanderClicked(InstanceContentDeepDungeon* dd, uint slot, uint rowId)
+        {
+            var potion = DeepDungeonAutoHeal.RegenPotionFor(dd->DeepDungeonId);
+            var held = potion is { } p ? DeepDungeonAutoHeal.HeldCount(p) : 0;
+            if (!Config.RegenBeforeLust || rowId != LustRowId || held == 0)
+            {
+                dd->UsePomander(slot);
+                return;
+            }
+            _lustSlot = slot;
+            _lustPotCount = held;
+            _lustDeadline = DateTime.Now.AddSeconds(LustPotionWaitSeconds);
+            _lustPot = default;
+        }
+
+        // Drink until the potion count drops (or we run out / time out), then queue Lust. refresh:
+        // true so the pending tick doesn't treat an already-up effect as someone else's use.
+        private void TickLustPotion(InstanceContentDeepDungeon* dd)
+        {
+            if (_lustSlot is not { } slot) return;
+
+            var now = DateTime.Now;
+            var potion = DeepDungeonAutoHeal.RegenPotionFor(dd->DeepDungeonId);
+            var held = potion is { } p ? DeepDungeonAutoHeal.HeldCount(p) : 0;
+            if (potion == null || held < _lustPotCount || now > _lustDeadline)
+            {
+                _lustSlot = null;
+                QueueUse(dd, slot, "Lust", refresh: true, thenReopen: false);
+                return;
+            }
+
+            DeepDungeonAutoHeal.TryUseItem(FFXIVClientStructs.FFXIV.Client.Game.ActionManager.Instance(), potion.Value, ref _lustPot, now);
         }
 
         // The nearest deep-dungeon coffer to the player, by GameObjectId (0 if none in range). Called
@@ -912,6 +967,7 @@ namespace YABOT.Features.DeepDungeons
                     _flashStart[shortName] = (DateTime.Now, FlashKind.Pickup);
 
                 var slotCapture = (uint)slot;
+                var rowCapture = slotRef.RowId;
                 DrawRow(
                     pomander.Icon,
                     shortName,
@@ -920,7 +976,7 @@ namespace YABOT.Features.DeepDungeons
                     info.Count,
                     showCount: info.Count > 0,
                     isActive,
-                    () => dd->UsePomander(slotCapture));
+                    () => UsePomanderClicked(dd, slotCapture, rowCapture));
                 any = true;
             }
 
