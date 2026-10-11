@@ -1,3 +1,4 @@
+using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using ECommons.DalamudServices;
 using ECommons.Reflection;
@@ -23,7 +24,6 @@ namespace YABOT.Features.PluginMods
 
         private bool prevBusy;
         private FieldInfo? selectWorldWindowField;
-        private PropertyInfo? isOpenProp;
         private FieldInfo? taskManagerField;
         private PropertyInfo? isBusyProp;
         private bool reflectionFailed;
@@ -61,7 +61,6 @@ namespace YABOT.Features.PluginMods
                 {
                     cachedPlugin = plugin;
                     selectWorldWindowField = null;
-                    isOpenProp = null;
                     taskManagerField = null;
                     isBusyProp = null;
                     prevBusy = false;
@@ -69,15 +68,9 @@ namespace YABOT.Features.PluginMods
 
                 if (!EnsureReflection(plugin)) return;
 
-                var window = selectWorldWindowField!.GetValue(null);
-                if (window == null)
-                {
-                    prevBusy = false;
-                    return;
-                }
-
-                var isOpen = (bool)(isOpenProp!.GetValue(window) ?? false);
-                if (!isOpen)
+                // Lifestream's SelectWorldWindow shadows Window.IsOpen with an obsolete dummy property,
+                // so go through Dalamud's Window type (shared across load contexts) instead of reflection.
+                if (selectWorldWindowField!.GetValue(null) is not Window window || !window.IsOpen)
                 {
                     prevBusy = false;
                     return;
@@ -90,7 +83,7 @@ namespace YABOT.Features.PluginMods
 
                 if (isBusy && !prevBusy)
                 {
-                    isOpenProp.SetValue(window, false);
+                    window.IsOpen = false;
                 }
 
                 prevBusy = isBusy;
@@ -113,7 +106,7 @@ namespace YABOT.Features.PluginMods
 
         private bool EnsureReflection(object plugin)
         {
-            if (selectWorldWindowField != null && isOpenProp != null && taskManagerField != null && isBusyProp != null)
+            if (selectWorldWindowField != null && taskManagerField != null && isBusyProp != null)
                 return true;
 
             try
@@ -127,12 +120,6 @@ namespace YABOT.Features.PluginMods
                     selectWorldWindowField = guiType.GetField("SelectWorldWindow", BindingFlags.Public | BindingFlags.Static)
                         ?? throw new InvalidOperationException("Static field 'SelectWorldWindow' not found on Lifestream.Services.Service.Gui.");
                 }
-
-                var window = selectWorldWindowField.GetValue(null);
-                if (window == null) return false;
-
-                isOpenProp ??= window.GetType().GetProperty("IsOpen")
-                    ?? throw new InvalidOperationException("Property 'IsOpen' not found on SelectWorldWindow.");
 
                 taskManagerField ??= plugin.GetType().GetField("TaskManager", BindingFlags.Public | BindingFlags.Instance)
                     ?? throw new InvalidOperationException("Field 'TaskManager' not found on Lifestream plugin.");
