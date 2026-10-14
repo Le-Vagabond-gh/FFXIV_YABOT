@@ -23,7 +23,7 @@ namespace YABOT.Features.PluginMods
         private const int MaxConsecutiveFailures = 5;
 
         private bool prevBusy;
-        private FieldInfo? selectWorldWindowField;
+        private Func<object?>? getSelectWorldWindow;
         private FieldInfo? taskManagerField;
         private PropertyInfo? isBusyProp;
         private bool reflectionFailed;
@@ -60,7 +60,7 @@ namespace YABOT.Features.PluginMods
                 if (!ReferenceEquals(plugin, cachedPlugin))
                 {
                     cachedPlugin = plugin;
-                    selectWorldWindowField = null;
+                    getSelectWorldWindow = null;
                     taskManagerField = null;
                     isBusyProp = null;
                     prevBusy = false;
@@ -70,7 +70,7 @@ namespace YABOT.Features.PluginMods
 
                 // Lifestream's SelectWorldWindow shadows Window.IsOpen with an obsolete dummy property,
                 // so go through Dalamud's Window type (shared across load contexts) instead of reflection.
-                if (selectWorldWindowField!.GetValue(null) is not Window window || !window.IsOpen)
+                if (getSelectWorldWindow!() is not Window window || !window.IsOpen)
                 {
                     prevBusy = false;
                     return;
@@ -106,19 +106,24 @@ namespace YABOT.Features.PluginMods
 
         private bool EnsureReflection(object plugin)
         {
-            if (selectWorldWindowField != null && taskManagerField != null && isBusyProp != null)
+            if (getSelectWorldWindow != null && taskManagerField != null && isBusyProp != null)
                 return true;
 
             try
             {
                 var asm = plugin.GetType().Assembly;
 
-                if (selectWorldWindowField == null)
+                if (getSelectWorldWindow == null)
                 {
                     var guiType = asm.GetType(GuiTypeName)
                         ?? throw new InvalidOperationException($"Type '{GuiTypeName}' not found in Lifestream assembly.");
-                    selectWorldWindowField = guiType.GetField("SelectWorldWindow", BindingFlags.Public | BindingFlags.Static)
-                        ?? throw new InvalidOperationException("Static field 'SelectWorldWindow' not found on Lifestream.Services.Service.Gui.");
+                    // static field up to 2.5.x, static property since 2.6.0
+                    const BindingFlags flags = BindingFlags.Public | BindingFlags.Static;
+                    var field = guiType.GetField("SelectWorldWindow", flags);
+                    var prop = guiType.GetProperty("SelectWorldWindow", flags);
+                    getSelectWorldWindow = field != null ? () => field.GetValue(null)
+                        : prop != null ? () => prop.GetValue(null)
+                        : throw new InvalidOperationException("Static member 'SelectWorldWindow' not found on Lifestream.Services.Service.Gui.");
                 }
 
                 taskManagerField ??= plugin.GetType().GetField("TaskManager", BindingFlags.Public | BindingFlags.Instance)
