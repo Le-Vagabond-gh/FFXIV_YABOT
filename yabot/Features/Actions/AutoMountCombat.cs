@@ -315,6 +315,17 @@ namespace YABOT.Features.Actions
             base.Disable();
         }
 
+        public override void Dispose()
+        {
+            teleportHook?.Dispose();
+            teleportWithTicketsHook?.Dispose();
+            aethernetTeleportHook?.Dispose();
+            teleportHook = null;
+            teleportWithTicketsHook = null;
+            aethernetTeleportHook = null;
+            base.Dispose();
+        }
+
         protected override DrawConfigDelegate DrawConfigTree => (ref bool haschanged) =>
         {
             ImGui.PushItemWidth(300);
