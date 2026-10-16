@@ -5,7 +5,7 @@ Bundle of "things you always forget to do" automations, ported from the standalo
 Sub-features:
 - **Auto Peloton / Sprint** - applied after moving for 2+ seconds (Peloton on Phys Ranged, Sprint on anyone, skipped if a speed buff is already up).
 - **Auto Summon Pet** - Summoner→Carbuncle, Scholar→Fairy, when standing still. Optional "summon in combat after death" gate (only re-summons if raised within the last 15 seconds).
-- **Auto Tank Stance** - PLD/WAR/DRK/GNB stance auto-applied when standing still without it.
+- **Auto Tank Stance** - PLD/WAR/DRK/GNB stance auto-applied when standing still without it. in 8-man duties (trials, raids) it fires once per zone, so you can toggle it off as offtank; re-fires after a raise if the stance was still up when you died.
 - **Auto Gathering Buffs** - MIN/BTN/FSH: Prospect/Triangulate, Sneak, and Truth of Mountains/Forests/Oceans (Truth only on home world). 2-second cooldown to avoid toggle spam.
 - **Auto Gysahl Greens** - re-feeds your chocobo when its timer drops below 15 minutes (off by default).
 - **Chocobo Stance Keeper** - enforces a chosen Free/Attacker/Defender/Healer stance on the chocobo companion.

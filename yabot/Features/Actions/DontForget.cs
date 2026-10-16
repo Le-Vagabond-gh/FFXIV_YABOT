@@ -3,6 +3,8 @@ using Dalamud.Game.Chat;
 using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Plugin.Services;
 using ECommons.DalamudServices;
+using ECommons.ExcelServices;
+using ECommons.GameHelpers;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.Game.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
@@ -75,12 +77,17 @@ namespace YABOT.Features.Actions
         private DateTime playerRaisedTimestamp = DateTime.MinValue;
         private bool wasUnconscious;
         private bool wasInCombat;
+        // 8-man duties: fire the stance once per zone so an offtank can toggle it off without fighting the plugin.
+        // re-armed after a raise only if the stance was still up when we died (ie we didn't drop it on purpose)
+        private bool tankStanceDone;
+        private bool tankStanceWasUp;
 
         public override void Enable()
         {
             Config = LoadConfig<Configs>() ?? new Configs();
             Svc.Framework.Update += OnFrameworkUpdate;
             Svc.Chat.ChatMessage += OnChatMessage;
+            Svc.ClientState.TerritoryChanged += OnTerritoryChanged;
             base.Enable();
         }
 
@@ -89,8 +96,23 @@ namespace YABOT.Features.Actions
             SaveConfig(Config);
             Svc.Framework.Update -= OnFrameworkUpdate;
             Svc.Chat.ChatMessage -= OnChatMessage;
+            Svc.ClientState.TerritoryChanged -= OnTerritoryChanged;
             base.Disable();
         }
+
+        private void OnTerritoryChanged(uint _) => tankStanceDone = false;
+
+        private static bool IsEightManDuty => Player.TerritoryIntendedUseEnum
+            is TerritoryIntendedUseEnum.Trial or TerritoryIntendedUseEnum.Raid or TerritoryIntendedUseEnum.Raid_2;
+
+        private static (uint action, uint status) TankStanceFor(uint classJobId) => classJobId switch
+        {
+            19 => (IronWill, IronWillStatus),
+            21 => (Defiance, DefianceStatus),
+            32 => (Grit, GritStatus),
+            37 => (RoyalGuard, RoyalGuardStatus),
+            _ => (0, 0),
+        };
 
         // Zoning / loading screen - statuses and action availability are in flux, so don't act yet.
         private static bool IsLoading =>
@@ -125,7 +147,12 @@ namespace YABOT.Features.Actions
                 {
                     playerRaisedTimestamp = DateTime.Now;
                     demiSummonLastSeen = DateTime.MinValue;
+                    if (tankStanceWasUp) tankStanceDone = false;
                 }
+
+                // sampled only while alive: the status is gone by the time Unconscious is set
+                if (!isUnconscious)
+                    tankStanceWasUp = player.StatusList.Any(x => x.StatusId == TankStanceFor(player.ClassJob.RowId).status);
 
                 wasInCombat = isInCombat;
                 wasUnconscious = isUnconscious;
@@ -202,26 +229,18 @@ namespace YABOT.Features.Actions
                     }
 
                     // Auto tank stance, with 2-second cooldown to prevent runaway recasts.
-                    if (Config.TankStance && (DateTime.Now - lastTankStanceAction).TotalSeconds >= 2)
+                    if (Config.TankStance && (DateTime.Now - lastTankStanceAction).TotalSeconds >= 2
+                        && !(IsEightManDuty && tankStanceDone))
                     {
-                        var statuses = player.StatusList;
-                        var fired = false;
-                        switch (classJobId)
+                        var (action, status) = TankStanceFor(classJobId);
+                        if (action != 0
+                            && !player.StatusList.Any(x => x.StatusId == status)
+                            && am->GetActionStatus(ActionType.Action, action) == 0)
                         {
-                            case 19 when !statuses.Any(x => x.StatusId == IronWillStatus)
-                                          && am->GetActionStatus(ActionType.Action, IronWill) == 0:
-                                am->UseAction(ActionType.Action, IronWill); fired = true; break;
-                            case 21 when !statuses.Any(x => x.StatusId == DefianceStatus)
-                                          && am->GetActionStatus(ActionType.Action, Defiance) == 0:
-                                am->UseAction(ActionType.Action, Defiance); fired = true; break;
-                            case 32 when !statuses.Any(x => x.StatusId == GritStatus)
-                                          && am->GetActionStatus(ActionType.Action, Grit) == 0:
-                                am->UseAction(ActionType.Action, Grit); fired = true; break;
-                            case 37 when !statuses.Any(x => x.StatusId == RoyalGuardStatus)
-                                          && am->GetActionStatus(ActionType.Action, RoyalGuard) == 0:
-                                am->UseAction(ActionType.Action, RoyalGuard); fired = true; break;
+                            am->UseAction(ActionType.Action, action);
+                            lastTankStanceAction = DateTime.Now;
+                            tankStanceDone = true;
                         }
-                        if (fired) lastTankStanceAction = DateTime.Now;
                     }
 
                     // Auto gathering buffs (MIN/BTN/FSH) when standing still, with 2-second cooldown
@@ -404,7 +423,7 @@ namespace YABOT.Features.Actions
 
             if (ImGui.Checkbox("Tank - Auto Tank Stance", ref Config.TankStance)) hasChanged = true;
             if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("Automatically enables tank stance when standing still.");
+                ImGui.SetTooltip("Automatically enables tank stance when standing still.\nIn 8-man duties: once per zone (re-fires after a raise if it was up when you died).");
 
             if (ImGui.Checkbox("Gatherer - Auto Buffs", ref Config.GatheringBuffs)) hasChanged = true;
             if (ImGui.IsItemHovered())
