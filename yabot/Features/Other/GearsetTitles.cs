@@ -151,10 +151,14 @@ namespace YABOT.Features.Other
         {
             var changed = false;
             var preview = titleId < 0 ? inheritLabel : TitleName(titleId);
+            // Read before BeginCombo consumes it. The combo popup auto-resizes, so a -1 width on the
+            // filter would be measured against whatever size the popup had last frame instead of its
+            // final one, and the popup visibly snaps for a frame when it opens.
+            var width = ImGui.CalcItemWidth();
 
             if (ImGui.BeginCombo(id, preview))
             {
-                ImGui.SetNextItemWidth(-1);
+                ImGui.SetNextItemWidth(width - ImGui.GetStyle().FramePadding.X * 2);
                 ImGui.InputTextWithHint($"{id}_filter", "Search...", ref titleFilter, 256);
                 var hasFilter = !string.IsNullOrEmpty(titleFilter);
 

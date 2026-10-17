@@ -1702,9 +1702,12 @@ namespace YABOT.Features.Other
         private bool DrawEmoteCombo(string label, uint selectedEmoteId, Action<uint?> onSelected)
         {
             var changed = false;
+            // Read before BeginCombo consumes it; a -1 width inside the auto-resizing popup makes it
+            // snap for a frame when it opens (same fix as GearsetTitles.DrawTitleCombo).
+            var width = ImGui.CalcItemWidth();
             if (ImGui.BeginCombo(label, GetSelectedName(selectedEmoteId)))
             {
-                ImGui.SetNextItemWidth(-1);
+                ImGui.SetNextItemWidth(width - ImGui.GetStyle().FramePadding.X * 2);
                 ImGui.InputTextWithHint($"##EmoteFilter{label}", "Search...", ref emoteSearchFilter, 256);
 
                 var hasFilter = !string.IsNullOrEmpty(emoteSearchFilter);
