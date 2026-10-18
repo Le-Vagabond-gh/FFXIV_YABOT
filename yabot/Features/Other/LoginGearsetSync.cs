@@ -127,8 +127,9 @@ namespace YABOT.Features.Other
             var targetId = target->Id;
             var targetName = target->NameString;
 
+            // EquipGearset returns 0 on success and -1 when refused, not the gearset id.
             var result = module->EquipGearset(targetId);
-            if (result != targetId)
+            if (result != 0)
             {
                 Log($"EquipGearset({targetId}) returned {result}, retrying");
                 return false;

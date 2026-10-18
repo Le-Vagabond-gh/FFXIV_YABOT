@@ -48,6 +48,9 @@ namespace YABOT.Features.Other
 
         private const int GearsetCount = 100;
 
+        // A retainer bell session with AutoRetainer can run for a long while; give up after that.
+        private const int BusyWaitTimeoutMs = 30 * 60_000;
+
         private Hook<RaptureGearsetModule.Delegates.EquipGearsetInternal>? equipGearsetHook;
 
         private List<(int Id, string Name)>? unlockedTitles;
@@ -96,7 +99,7 @@ namespace YABOT.Features.Other
             {
                 // Negative results are the game refusing the switch (in combat, gear locked, bad id);
                 // don't change the title for an equip that never happened.
-                if (result >= 0) ApplyTitle(gearsetId);
+                if (result >= 0) QueueApply(gearsetId);
             }
             catch (Exception e)
             {
@@ -106,22 +109,34 @@ namespace YABOT.Features.Other
             return result;
         }
 
-        private void ApplyTitle(int gearsetId)
+        // Applying is deferred until the character is free: while occupied (retainer bell, dialogue,
+        // cutscene) the title update is dropped, and login-time equips get repeated by the game and by
+        // Login Gearset Sync, so sending inline re-logged the same title on every attempt. One pending
+        // apply at a time; a newer switch replaces an older one still waiting.
+        private void QueueApply(int gearsetId)
+        {
+            TaskManager.Abort();
+            TaskManager.EnqueueWithTimeout(() => ApplyTitle(gearsetId) != TitleHelper.ApplyResult.NotReady, BusyWaitTimeoutMs, $"Apply title for gearset {gearsetId}");
+        }
+
+        private TitleHelper.ApplyResult ApplyTitle(int gearsetId)
         {
             var titleId = Config.GearsetTitleIds.TryGetValue(gearsetId, out var assigned) ? assigned : Config.DefaultTitleId;
-            if (titleId < 0) return;
+            if (titleId < 0) return TitleHelper.ApplyResult.AlreadyActive;
 
-            switch (TitleHelper.Apply(titleId))
+            var result = TitleHelper.Apply(titleId);
+            switch (result)
             {
                 case TitleHelper.ApplyResult.NotUnlocked:
                     Log($"title #{titleId} is not unlocked, skipping gearset {gearsetId}");
-                    return;
+                    break;
                 case TitleHelper.ApplyResult.Applied:
                     Log($"gearset {gearsetId} -> title {titleId} ({TitleName(titleId)})");
                     if (Config.AnnounceInChat)
                         TitleHelper.Announce(titleId);
-                    return;
+                    break;
             }
+            return result;
         }
 
         private static string TitleName(int titleId) => TitleHelper.TitleName(titleId);

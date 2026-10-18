@@ -1,3 +1,4 @@
+using ECommons;
 using ECommons.DalamudServices;
 using FFXIVClientStructs.FFXIV.Client.Game.Character;
 using FFXIVClientStructs.FFXIV.Client.Game.UI;
@@ -49,11 +50,13 @@ public static unsafe class TitleHelper
 
     // Sends the title change unless it's already worn or not owned. The unlock check is only
     // trustworthy once the server has sent the title list; before that, trust the id.
+    // NotReady while occupied (retainer bell, dialogue, cutscene): the server drops the title update
+    // then, and the caller would keep re-sending and re-logging until the character is free again.
     public static ApplyResult Apply(int titleId)
     {
         var player = Svc.Objects.LocalPlayer;
         var ui = UIState.Instance();
-        if (player == null || ui == null) return ApplyResult.NotReady;
+        if (player == null || ui == null || GenericHelpers.IsOccupied()) return ApplyResult.NotReady;
 
         if (titleId > 0 && ui->TitleList.DataReceived && !ui->TitleList.IsTitleUnlocked((ushort)titleId))
             return ApplyResult.NotUnlocked;

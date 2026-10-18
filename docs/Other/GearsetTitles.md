@@ -23,4 +23,6 @@ The title changes as part of the switch, including when you re-equip the gearset
 
 A switch the game refuses (in combat, or with gear locked in a duty) leaves your title alone. Logging in doesn't change your title either, since nothing is equipping a gearset.
 
+If you switch gearsets while busy (talking to a retainer, in a dialogue, watching a cutscene) the title is applied once you're free again. Only the most recent switch counts, so several switches while busy end up with one title change.
+
 Titles you haven't unlocked are skipped rather than applied. If the dropdown says the title list isn't loaded yet, open the game's own title window once (Character -> Title) and reopen the settings.
