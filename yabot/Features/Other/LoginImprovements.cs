@@ -176,6 +176,7 @@ namespace YABOT.Features.Other
             public Vector3 MinionPosition = new(0.7f, 0f, -0.5f);
             public bool SkipLoginConfirm = false;
             public bool AutoLoginSingleCharacter = false;
+            public bool AutoStart = false;
             public bool SkipLogoutConfirm = false;
             public bool SkipLogo = false;
             public bool MoveQueueDialog = false;
@@ -948,6 +949,7 @@ namespace YABOT.Features.Other
                 if (Config.SkipLogoutConfirm && Svc.ClientState.IsLoggedIn)
                     AutoConfirmLogoutIfVisible();
 
+                TryAutoStart();
                 TryAutoLogin();
 
                 if (pendingSheatheCompleteAt.HasValue && DateTime.Now >= pendingSheatheCompleteAt.Value)
@@ -1455,6 +1457,44 @@ namespace YABOT.Features.Other
             }
         }
 
+        private DateTime nextAutoStartCheck = DateTime.MinValue;
+
+        // clicks Start every time the title menu is ready, unless Lifestream is
+        // mid-task (it drives the title screen itself for DC travel / relogs).
+        // IsReady stays true for a few frames after the click, hence the throttle.
+        // Shift held at any point while the title menu exists latches it off until
+        // the menu is gone, so the other title buttons stay usable after releasing.
+        private bool autoStartSuppressed;
+
+        private void TryAutoStart()
+        {
+            if (!Config.AutoStart || Svc.ClientState.IsLoggedIn)
+                return;
+
+            try
+            {
+                if (!ECommons.GenericHelpers.TryGetAddonMaster<AddonMaster._TitleMenu>(out var title))
+                {
+                    autoStartSuppressed = false;
+                    return;
+                }
+
+                autoStartSuppressed |= Svc.KeyState[Dalamud.Game.ClientState.Keys.VirtualKey.SHIFT];
+                if (autoStartSuppressed || DateTime.Now < nextAutoStartCheck || !title.IsReady)
+                    return;
+
+                nextAutoStartCheck = DateTime.Now.AddSeconds(AutoLoginRetrySeconds);
+                if (IsLifestreamBusy())
+                    return;
+
+                title.Start();
+            }
+            catch (Exception e)
+            {
+                Svc.Log.Error(e, "LoginImprovements.TryAutoStart");
+            }
+        }
+
         private bool IsLifestreamBusy()
         {
             try
@@ -1793,6 +1833,13 @@ namespace YABOT.Features.Other
                 SaveConfig(Config);
                 hasChanged = true;
             }
+
+            if (ImGui.Checkbox("Auto Start on Title Screen", ref Config.AutoStart))
+            {
+                SaveConfig(Config);
+                hasChanged = true;
+            }
+            ImGuiComponents.HelpMarker("Clicks Start every time the title screen shows, unless Lifestream is busy. Hold Shift while the title screen appears to skip it for that visit.");
 
             if (ImGui.Checkbox("Auto Login Single Character", ref Config.AutoLoginSingleCharacter))
             {
