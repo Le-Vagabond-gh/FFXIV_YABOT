@@ -75,6 +75,8 @@ namespace YABOT.Features.Actions
         private DateTime lastGysahlUse = DateTime.MinValue;
         private DateTime demiSummonLastSeen = DateTime.MinValue;
         private DateTime movementStartTime = DateTime.MinValue;
+        private DateTime lastActionTime = DateTime.MinValue;
+        private const double PvPSprintDelaySeconds = 1;
         private DateTime lastStanceAction = DateTime.MinValue;
         private DateTime lastTankStanceAction = DateTime.MinValue;
         private DateTime playerRaisedTimestamp = DateTime.MinValue;
@@ -189,7 +191,15 @@ namespace YABOT.Features.Actions
                     am->UseAction(ActionType.Action, Peloton);
                 }
 
-                if (combatSummonAllowed && Config.AutoSprint && movingForTwoSeconds
+                // PvP: sprint again 1s after the last action, in combat too and without the
+                // 2s movement wait. any action use (cast or instant) sets the animation lock
+                if (am->AnimationLock > 0 || player.IsCasting) lastActionTime = DateTime.Now;
+                var sprintAllowed = Svc.ClientState.IsPvP
+                    ? isMoving && !Svc.Condition[ConditionFlag.Mounted]
+                        && (DateTime.Now - lastActionTime).TotalSeconds >= PvPSprintDelaySeconds
+                    : combatSummonAllowed && movingForTwoSeconds;
+
+                if (sprintAllowed && Config.AutoSprint
                     && !hasPeloton && !hasSprint
                     && !player.StatusList.Any(x => x.StatusId is GuardStatus1 or GuardStatus2))
                 {
