@@ -12,12 +12,13 @@ namespace YABOT.Features.DeepDungeons
 {
     public unsafe class DeepDungeonTitles : BaseFeature
     {
-        public override string Name => "Deep Dungeon Titles";
+        // class name kept: the config file and the enabled list are keyed on it
+        public override string Name => "Zone Titles";
 
         public override string Description =>
-            "Pick a title per deep dungeon; it gets applied when you walk into the area around that deep dungeon's entrance (Quarrymill, Crick, The Eight Sentinels, Wolekdorf) or enter the deep dungeon itself. Your previous title isn't restored when you leave.";
+            "Pick a title per deep dungeon; it gets applied when you walk into the area around that deep dungeon's entrance (Quarrymill, Crick, The Eight Sentinels, Wolekdorf) or enter the deep dungeon itself. Optionally wears a Makai title in PvP zones. Your previous title isn't restored when you leave.";
 
-        public override FeatureType FeatureType => FeatureType.DeepDungeons;
+        public override FeatureType FeatureType => FeatureType.Other;
 
         public class Configs : FeatureConfig
         {
@@ -25,6 +26,8 @@ namespace YABOT.Features.DeepDungeons
             public Dictionary<DD, int> TitleIds = new();
 
             public bool AnnounceInChat = false;
+
+            public bool MakaiTitleInPvP = false;
         }
 
         public Configs Config { get; private set; } = null!;
@@ -46,6 +49,15 @@ namespace YABOT.Features.DeepDungeons
         // The Trouble with Buried II, For the Hoard III/V/VI/VII - the hoard counts across every deep dungeon.
         private static readonly uint[] HoardAchievements = { 1666, 1663, 2056, 3184, 3816 };
 
+        // GARO collaboration titles, ClassJob row id -> Title row id. the other jobs have none
+        private static readonly Dictionary<uint, int> MakaiJobTitles = new()
+        {
+            { 20, 327 }, { 23, 330 }, { 25, 331 }, { 24, 332 }, { 27, 334 }, { 28, 335 }, { 31, 337 },
+            { 33, 338 }, { 34, 639 }, { 35, 640 }, { 37, 641 }, { 38, 642 }, { 39, 643 }, { 40, 644 },
+        };
+
+        private const int MakaiMasterTitle = 325;
+
         private readonly Dictionary<DD, int[]> titleOptions = new();
 
         // Index into Dungeons while in an entrance territory, -1 otherwise.
@@ -59,6 +71,7 @@ namespace YABOT.Features.DeepDungeons
             Config = LoadConfig<Configs>() ?? new Configs();
             Svc.ClientState.TerritoryChanged += OnTerritoryChanged;
             Svc.Framework.Update += OnUpdate;
+            Svc.ClientState.ClassJobChanged += OnClassJobChanged;
             OnTerritoryChanged(Svc.ClientState.TerritoryType);
             base.Enable();
         }
@@ -68,6 +81,7 @@ namespace YABOT.Features.DeepDungeons
             SaveConfig(Config);
             Svc.ClientState.TerritoryChanged -= OnTerritoryChanged;
             Svc.Framework.Update -= OnUpdate;
+            Svc.ClientState.ClassJobChanged -= OnClassJobChanged;
             base.Disable();
         }
 
@@ -75,6 +89,9 @@ namespace YABOT.Features.DeepDungeons
         {
             entranceIndex = System.Array.FindIndex(Dungeons, d => d.Territory == territory);
             inEntranceArea = false;
+
+            makaiPending = Config.MakaiTitleInPvP && IsPvPZone(territory);
+            if (makaiPending) return;
 
             var kind = ZoneHelper.GetDeepDungeon(territory);
             if (kind == DD.None) return;
@@ -85,6 +102,21 @@ namespace YABOT.Features.DeepDungeons
 
         private void OnUpdate(IFramework framework)
         {
+            if (makaiPending && System.DateTime.Now >= nextMakaiTry)
+            {
+                nextMakaiTry = System.DateTime.Now.AddSeconds(MakaiRetrySeconds);
+                try
+                {
+                    var state = TryApplyMakai();
+                    if (state != lastMakaiState) Log($"PvP: {state}");
+                    lastMakaiState = state;
+                }
+                catch (System.Exception e)
+                {
+                    Svc.Log.Error(e, $"[{Name}] TryApplyMakai");
+                }
+            }
+
             if (entranceIndex < 0) return;
 
             try
@@ -107,14 +139,69 @@ namespace YABOT.Features.DeepDungeons
         private TitleHelper.ApplyResult TryApply(DD kind)
         {
             if (!Config.TitleIds.TryGetValue(kind, out var titleId) || titleId <= 0) return TitleHelper.ApplyResult.AlreadyActive;
+            return ApplyAndLog(titleId, kind.ToString());
+        }
 
+        private TitleHelper.ApplyResult ApplyAndLog(int titleId, string source)
+        {
             var result = TitleHelper.Apply(titleId);
             if (result == TitleHelper.ApplyResult.Applied)
             {
-                Log($"{kind} -> {TitleHelper.TitleName(titleId)}");
+                Log($"{source} -> {TitleHelper.TitleName(titleId)}");
                 if (Config.AnnounceInChat) TitleHelper.Announce(titleId);
             }
             return result;
+        }
+
+        private static bool IsPvPZone(uint territory) =>
+            Svc.Data.GetExcelSheet<TerritoryType>().TryGetRow(territory, out var row) && row.IsPvpZone;
+
+        // the job can still be changed inside a PvP zone (Wolves' Den Pier, before a match starts)
+        private void OnClassJobChanged(uint classJobId)
+        {
+            if (Config.MakaiTitleInPvP && IsPvPZone(Svc.ClientState.TerritoryType)) makaiPending = true;
+        }
+
+        // retried from OnUpdate until the character is seen wearing the title: the request is
+        // silently dropped while zoning in or busy, so a sent update proves nothing
+        private bool makaiPending;
+        private System.DateTime nextMakaiTry;
+        private string lastMakaiState = string.Empty;
+        private const double MakaiRetrySeconds = 2;
+
+        // the job's Makai title, else Makai Master, else any owned Makai title. needs the title
+        // list from the server, so it waits for it instead of trusting ids.
+        // returns what happened, logged when it changes
+        private string TryApplyMakai()
+        {
+            var player = Svc.Objects.LocalPlayer;
+            if (player == null) return "no player yet";
+            if (!TitleHelper.UnlocksKnown()) return "title list not received yet";
+
+            var candidates = new List<int>();
+            if (MakaiJobTitles.TryGetValue(player.ClassJob.RowId, out var jobTitle)) candidates.Add(jobTitle);
+            candidates.Add(MakaiMasterTitle);
+            candidates.AddRange(MakaiJobTitles.Values);
+
+            var titleId = candidates.FirstOrDefault(TitleHelper.IsUnlocked);
+            if (titleId <= 0)
+            {
+                makaiPending = false;
+                return "no Makai title owned";
+            }
+
+            var name = TitleHelper.TitleName(titleId);
+            switch (TitleHelper.Apply(titleId))
+            {
+                case TitleHelper.ApplyResult.AlreadyActive:
+                    makaiPending = false;
+                    if (Config.AnnounceInChat && lastMakaiState.StartsWith("sent")) TitleHelper.Announce(titleId);
+                    return $"wearing {name}";
+                case TitleHelper.ApplyResult.Applied:
+                    return $"sent {name}, waiting for it to show";
+                default:
+                    return "busy";
+            }
         }
 
         // Title row ids for a deep dungeon: its own achievements' titles, then the shared hoard ones.
@@ -141,6 +228,14 @@ namespace YABOT.Features.DeepDungeons
                 Config.AnnounceInChat = announce;
                 hasChanged = true;
             }
+
+            var makai = Config.MakaiTitleInPvP;
+            if (ImGui.Checkbox("Wear a Makai title in PvP zones##ddtitles_makai", ref makai))
+            {
+                Config.MakaiTitleInPvP = makai;
+                hasChanged = true;
+            }
+            Dalamud.Interface.Components.ImGuiComponents.HelpMarker("Applied when you enter a PvP zone (Wolves' Den Pier included) or change job there: the Makai title of your job, else Makai Master, else any Makai title you own.");
 
             foreach (var (kind, label, _, _, achievements) in Dungeons)
             {
