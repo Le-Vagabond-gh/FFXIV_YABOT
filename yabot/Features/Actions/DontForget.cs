@@ -48,6 +48,7 @@ namespace YABOT.Features.Actions
         private const uint SummonCarbuncle = 25798;
         private const uint Peloton = 7557;
         private const uint Sprint = 4;
+        private const uint PvPSprint = 29057;
         private const uint GysahlGreens = 4868;
         private const uint IronWill = 28, Defiance = 48, Grit = 3629, RoyalGuard = 16142;
         private const uint IronWillStatus = 79, DefianceStatus = 91, GritStatus = 743, RoyalGuardStatus = 1833;
@@ -56,7 +57,9 @@ namespace YABOT.Features.Actions
         private const uint SneakStatus = 47, ProspectStatus = 225, TriangulateStatus = 217;
         private const uint TruthOfMountainsStatus = 222, TruthOfForestsStatus = 221, TruthOfOceansStatus = 1173;
         private const uint PelotonStatus = 1199;
-        private const uint SprintStatus1 = 50, SprintStatus2 = 4398;
+        private const uint SprintStatus1 = 50, SprintStatus2 = 4398, SprintStatusPvP = 1342;
+        // PvP Guard, two statuses share the name. any action drops it, sprint included
+        private const uint GuardStatus1 = 3054, GuardStatus2 = 3673;
 
         // ChocoboStance dropdown
         public static readonly string[] StanceLabels = { "Disabled", "Free Stance", "Attacker Stance", "Defender Stance", "Healer Stance" };
@@ -178,7 +181,7 @@ namespace YABOT.Features.Actions
                     && (DateTime.Now - movementStartTime).TotalSeconds >= 2;
 
                 var hasPeloton = player.StatusList.Any(x => x.StatusId == PelotonStatus);
-                var hasSprint = player.StatusList.Any(x => x.StatusId == SprintStatus1 || x.StatusId == SprintStatus2);
+                var hasSprint = player.StatusList.Any(x => x.StatusId is SprintStatus1 or SprintStatus2 or SprintStatusPvP);
 
                 if (combatSummonAllowed && Config.Peloton && movingForTwoSeconds
                     && am->GetActionStatus(ActionType.Action, Peloton) == 0 && !hasPeloton)
@@ -187,10 +190,17 @@ namespace YABOT.Features.Actions
                 }
 
                 if (combatSummonAllowed && Config.AutoSprint && movingForTwoSeconds
-                    && am->GetActionStatus(ActionType.GeneralAction, Sprint) == 0
-                    && !hasPeloton && !hasSprint)
+                    && !hasPeloton && !hasSprint
+                    && !player.StatusList.Any(x => x.StatusId is GuardStatus1 or GuardStatus2))
                 {
-                    am->UseAction(ActionType.GeneralAction, Sprint);
+                    // PvP sprint is a toggle: reusing it with the status up cancels it,
+                    // so hasSprint has to cover its status too
+                    foreach (var (type, id) in new[] { (ActionType.GeneralAction, Sprint), (ActionType.Action, PvPSprint) })
+                    {
+                        if (am->GetActionStatus(type, id) != 0) continue;
+                        am->UseAction(type, id);
+                        break;
+                    }
                 }
 
                 if (!isMoving && combatSummonAllowed)
