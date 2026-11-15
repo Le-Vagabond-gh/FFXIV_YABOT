@@ -111,7 +111,11 @@ internal class MainWindow : Window
             {
                 if (filteredFeatures.Count > 0)
                 {
-                    DrawFeatures(filteredFeatures.ToArray(), header: "Search Results");
+                    foreach (var (label, type) in Categories)
+                    {
+                        if (type != null)
+                            DrawFeatures(filteredFeatures.Where(f => f.FeatureType == type).ToArray(), header: label);
+                    }
                 }
                 else if (OpenWindow == AllTweaks)
                 {
