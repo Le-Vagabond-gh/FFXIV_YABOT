@@ -17,6 +17,8 @@ There is also an option to announce the title change in chat.
 
 ## PvP zones
 
-Tick "Wear a Makai title in PvP zones" to put on a title from the GARO collaboration whenever you enter a PvP zone (Wolves' Den Pier, Crystalline Conflict, Frontline, Rival Wings) or change job there. It picks the Makai title of your current job if you own it, then Makai Master, then any other Makai title you own. If you own none, your title is left alone. Off by default.
+Open the "Makai title in PvP zones" dropdown and tick the zones (Wolves' Den Pier, Frontline, Rival Wings, Crystalline Conflict) where you want a title from the GARO collaboration; it gets put on whenever you enter one of them or change job there. It picks the Makai title of your current job if you own it, then Makai Master, then any other Makai title you own. If you own none, your title is left alone. No zone ticked by default.
+
+When you leave for a zone that isn't ticked, the title you had before the Makai one is put back on. The exception is a session that starts inside a ticked zone already wearing a Makai title (logging in at Wolves' Den Pier, for instance): there is nothing to go back to, so the title stays.
 
 If the titles aren't greyed out yet, open the game's title window once so the game loads your unlocked titles.

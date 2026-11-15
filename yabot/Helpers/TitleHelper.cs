@@ -46,6 +46,13 @@ public static unsafe class TitleHelper
 
     public static void Announce(int titleId) => Svc.Chat.Print($"[YABOT] Title set to {TitleName(titleId)}.");
 
+    // Title row id the character is wearing (0 = none), null while there is no local player.
+    public static int? CurrentTitle()
+    {
+        var player = Svc.Objects.LocalPlayer;
+        return player == null ? null : ((Character*)player.Address)->CharacterData.TitleId;
+    }
+
     public enum ApplyResult { Applied, AlreadyActive, NotUnlocked, NotReady }
 
     // Sends the title change unless it's already worn or not owned. The unlock check is only
@@ -61,7 +68,7 @@ public static unsafe class TitleHelper
         if (titleId > 0 && ui->TitleList.DataReceived && !ui->TitleList.IsTitleUnlocked((ushort)titleId))
             return ApplyResult.NotUnlocked;
 
-        if (((Character*)player.Address)->CharacterData.TitleId == titleId) return ApplyResult.AlreadyActive;
+        if (CurrentTitle() == titleId) return ApplyResult.AlreadyActive;
 
         ui->TitleController.SendTitleIdUpdate((ushort)titleId);
         return ApplyResult.Applied;
