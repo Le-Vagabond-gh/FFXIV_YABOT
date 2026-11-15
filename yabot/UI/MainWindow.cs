@@ -14,29 +14,38 @@ using System.Numerics;
 
 namespace YABOT.UI;
 
-internal class MainWindow : Window
+internal partial class MainWindow : Window
 {
     public string OpenWindow { get; private set; } = AllTweaks;
 
     public const string AllTweaks = "All Tweaks";
     public const string EnabledLabel = "Enabled";
 
-    private static readonly (string Label, FeatureType? Type)[] Categories =
+    private static readonly (string Label, FeatureType? Type)[] Categories = BuildCategories();
+
+    static partial void AddExtraCategories(List<(string Label, FeatureType? Type)> categories);
+
+    private static (string Label, FeatureType? Type)[] BuildCategories()
     {
-        (AllTweaks, null),
-        (EnabledLabel, null),
-        ("Actions", FeatureType.Actions),
-        ("Chat", FeatureType.Chat),
-        ("Commands", FeatureType.Commands),
-        ("Other", FeatureType.Other),
-        ("Targets", FeatureType.Targets),
-        ("UI", FeatureType.UI),
-        ("Occult Crescent", FeatureType.OccultCrescent),
-        ("Cosmic Exploration", FeatureType.CosmicExploration),
-        ("Deep Dungeons", FeatureType.DeepDungeons),
-        ("Events", FeatureType.Events),
-        ("Plugin Mods", FeatureType.PluginMods),
-    };
+        var categories = new List<(string Label, FeatureType? Type)>
+        {
+            (AllTweaks, null),
+            (EnabledLabel, null),
+            ("Actions", FeatureType.Actions),
+            ("Chat", FeatureType.Chat),
+            ("Commands", FeatureType.Commands),
+            ("Other", FeatureType.Other),
+            ("Targets", FeatureType.Targets),
+            ("UI", FeatureType.UI),
+            ("Occult Crescent", FeatureType.OccultCrescent),
+            ("Cosmic Exploration", FeatureType.CosmicExploration),
+            ("Deep Dungeons", FeatureType.DeepDungeons),
+            ("Events", FeatureType.Events),
+            ("Plugin Mods", FeatureType.PluginMods),
+        };
+        AddExtraCategories(categories);
+        return [.. categories];
+    }
 
     public MainWindow() : base($"YABOT {typeof(MainWindow).Assembly.GetName().Version}###YABOTMain")
     {
