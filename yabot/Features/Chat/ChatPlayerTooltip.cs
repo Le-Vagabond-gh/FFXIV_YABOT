@@ -10,7 +10,8 @@ using System.Runtime.InteropServices;
 using YABOT.FeaturesSetup;
 using LSeStringBuilder = Lumina.Text.SeStringBuilder;
 
-namespace YABOT.Features.UI
+// not YABOT.Features.Chat: that namespace hides ECommons' Chat class in every other feature
+namespace YABOT.Features.ChatFeatures
 {
     public unsafe class ChatPlayerTooltip : BaseFeature
     {
@@ -19,7 +20,7 @@ namespace YABOT.Features.UI
         public override string Description =>
             "Hovering a player name in chat shows a tooltip with their name and home world. Useful for spotting visitors from other worlds/data centers without right-clicking.";
 
-        public override FeatureType FeatureType => FeatureType.UI;
+        public override FeatureType FeatureType => FeatureType.Chat;
 
         private static readonly string[] AddonNames =
         {

@@ -7,7 +7,7 @@ using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using YABOT.FeaturesSetup;
 
-namespace YABOT.Features.Other
+namespace YABOT.Features.UI
 {
     public unsafe class SkipTeleportConfirm : BaseFeature
     {
@@ -16,7 +16,7 @@ namespace YABOT.Features.Other
         public override string Description =>
             "Automatically clicks Yes on the teleport confirmation prompt that opens when clicking an aetheryte icon on the world map.";
 
-        public override FeatureType FeatureType => FeatureType.Other;
+        public override FeatureType FeatureType => FeatureType.UI;
 
         // The teleport callback is registered with EventKind = 1 on the Map agent.
         private const ulong TeleportEventKind = 1;

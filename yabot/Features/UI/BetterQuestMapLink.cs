@@ -6,7 +6,7 @@ using Lumina.Excel.Sheets;
 using YABOT.FeaturesSetup;
 using MapType = FFXIVClientStructs.FFXIV.Client.UI.Agent.MapType;
 
-namespace YABOT.Features.Other
+namespace YABOT.Features.UI
 {
     public unsafe class BetterQuestMapLink : BaseFeature
     {
@@ -15,7 +15,7 @@ namespace YABOT.Features.Other
         public override string Description =>
             "Clicking a quest's map link no longer forces you to the quest's flag - it just opens the map normally so you can scroll around.";
 
-        public override FeatureType FeatureType => FeatureType.Other;
+        public override FeatureType FeatureType => FeatureType.UI;
 
         private Hook<AgentMap.Delegates.OpenMap>? openMapHook;
 

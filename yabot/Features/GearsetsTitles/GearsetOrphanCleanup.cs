@@ -7,7 +7,7 @@ using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.UI.Misc;
 using YABOT.FeaturesSetup;
 
-namespace YABOT.Features.Other
+namespace YABOT.Features.GearsetsTitles
 {
     // Watches every gearset's item list and reacts to changes, whoever made them - the game's own
     // "Update Gearset" action, Stylist (which writes gearset memory directly rather than calling the
@@ -24,7 +24,7 @@ namespace YABOT.Features.Other
             "and is no longer used by any gearset gets moved out of the armoury chest into your first free " +
             "inventory slot (top-left of bag 1, working down - not the game's default last bag/last slot).";
 
-        public override FeatureType FeatureType => FeatureType.Other;
+        public override FeatureType FeatureType => FeatureType.GearsetsTitles;
 
         public override bool UseAutoConfig => true;
 

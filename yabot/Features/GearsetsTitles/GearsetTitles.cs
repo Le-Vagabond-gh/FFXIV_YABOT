@@ -9,7 +9,7 @@ using System.Collections.Generic;
 using YABOT.FeaturesSetup;
 using YABOT.Helpers;
 
-namespace YABOT.Features.Other
+namespace YABOT.Features.GearsetsTitles
 {
     // Hooks RaptureGearsetModule.EquipGearsetInternal, the chokepoint every gearset switch funnels
     // through - the gearset window, hotbar slots, /gearset macros and other plugins all end up there,
@@ -25,7 +25,7 @@ namespace YABOT.Features.Other
             "did the switching - the gearset window, a hotbar slot, a macro or another plugin. Gearsets without a " +
             "title of their own fall back to a configurable default title (or leave your current title untouched).";
 
-        public override FeatureType FeatureType => FeatureType.Other;
+        public override FeatureType FeatureType => FeatureType.GearsetsTitles;
 
         public override bool UseAutoConfig => false;
 

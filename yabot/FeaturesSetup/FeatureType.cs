@@ -6,7 +6,7 @@ namespace YABOT.FeaturesSetup
         Chat,
         Commands,
         Other,
-        Targets,
+        GearsetsTitles,
         UI,
         OccultCrescent,
         DeepDungeons,

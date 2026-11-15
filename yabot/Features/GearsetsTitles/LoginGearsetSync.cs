@@ -9,7 +9,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-namespace YABOT.Features.Other
+namespace YABOT.Features.GearsetsTitles
 {
     // RaptureGearsetModule.CurrentGearsetIndex is client-side state, not character state: it survives
     // logout on the machine that set it and is whatever that machine last equipped everywhere else.
@@ -30,7 +30,7 @@ namespace YABOT.Features.Other
             "Particularly useful if you play the same character from several computers - the active gearset is " +
             "remembered per machine, so it's usually stale after switching.";
 
-        public override FeatureType FeatureType => FeatureType.Other;
+        public override FeatureType FeatureType => FeatureType.GearsetsTitles;
 
         public override bool UseAutoConfig => false;
 

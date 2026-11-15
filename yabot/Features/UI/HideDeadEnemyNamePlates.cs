@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using Dalamud.Game.Gui.NamePlate;
 using YABOT.FeaturesSetup;
 
-namespace YABOT.Features.Other
+namespace YABOT.Features.UI
 {
     public class HideDeadEnemyNamePlates : BaseFeature
     {
@@ -11,7 +11,7 @@ namespace YABOT.Features.Other
         public override string Description =>
             "Hides nameplates and markers on enemy NPCs that have already been killed, reducing visual clutter after pulls.";
 
-        public override FeatureType FeatureType => FeatureType.Other;
+        public override FeatureType FeatureType => FeatureType.UI;
 
         public override void Enable()
         {

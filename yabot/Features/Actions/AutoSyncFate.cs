@@ -15,7 +15,7 @@ using System;
 using System.Linq;
 using System.Numerics;
 
-namespace YABOT.Features.Other
+namespace YABOT.Features.Actions
 {
     public unsafe class AutoSyncFate : BaseFeature
     {
@@ -26,7 +26,7 @@ namespace YABOT.Features.Other
 
         public override string Description => "Syncs when entering a FATE if you're overlevelled.";
 
-        public override FeatureType FeatureType => FeatureType.Other;
+        public override FeatureType FeatureType => FeatureType.Actions;
 
         public class Configs : FeatureConfig
         {

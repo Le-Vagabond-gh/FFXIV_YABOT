@@ -8,7 +8,7 @@ using System.Collections.Generic;
 using System.Linq;
 using DD = YABOT.Helpers.ZoneHelper.DeepDungeonKind;
 
-namespace YABOT.Features.DeepDungeons
+namespace YABOT.Features.GearsetsTitles
 {
     public unsafe class DeepDungeonTitles : BaseFeature
     {
@@ -18,7 +18,7 @@ namespace YABOT.Features.DeepDungeons
         public override string Description =>
             "Pick a title per deep dungeon; it gets applied when you walk into the area around that deep dungeon's entrance (Quarrymill, Crick, The Eight Sentinels, Wolekdorf) or enter the deep dungeon itself. Optionally wears a Makai title in PvP zones. Your previous title isn't restored when you leave.";
 
-        public override FeatureType FeatureType => FeatureType.Other;
+        public override FeatureType FeatureType => FeatureType.GearsetsTitles;
 
         public class Configs : FeatureConfig
         {

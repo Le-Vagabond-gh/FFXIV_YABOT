@@ -5,7 +5,7 @@ using ECommons.GameHelpers;
 using Dalamud.Bindings.ImGui;
 using YABOT.FeaturesSetup;
 
-namespace YABOT.Features.Other
+namespace YABOT.Features.UI
 {
     public class AutoDisplayNameSettings : BaseFeature
     {
@@ -13,7 +13,7 @@ namespace YABOT.Features.Other
 
         public override string Description => "Automatically changes the display name setting for other PCs based on whether you are in a city, in a duty, in a deep dungeon, in a large-scale duty (alliance raids, Eureka, Bozja, Occult Crescent), or outside.";
 
-        public override FeatureType FeatureType => FeatureType.Other;
+        public override FeatureType FeatureType => FeatureType.UI;
 
         public enum DisplayNameType
         {
